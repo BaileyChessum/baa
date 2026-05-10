@@ -14,7 +14,7 @@ namespace baa {
 TEST(BumpAllocator, AllocateSingle) {
   Bump bump(256);
   BumpAllocator<int> alloc(bump);
-  int *p = alloc.allocate(1);
+  int* p = alloc.allocate(1);
   ASSERT_NE(p, nullptr);
   *p = 42;
   EXPECT_EQ(*p, 42);
@@ -23,7 +23,7 @@ TEST(BumpAllocator, AllocateSingle) {
 TEST(BumpAllocator, AllocateArray) {
   Bump bump(256);
   BumpAllocator<int> alloc(bump);
-  int *p = alloc.allocate(8);
+  int* p = alloc.allocate(8);
   for (int i = 0; i < 8; ++i)
     p[i] = i;
   for (int i = 0; i < 8; ++i)
@@ -33,11 +33,11 @@ TEST(BumpAllocator, AllocateArray) {
 TEST(BumpAllocator, SequentialAllocationsDoNotOverlap) {
   Bump bump(256);
   BumpAllocator<int> alloc(bump);
-  int *a = alloc.allocate(1);
-  int *b = alloc.allocate(1);
+  int* a = alloc.allocate(1);
+  int* b = alloc.allocate(1);
   EXPECT_NE(a, b);
   // Regions must not overlap: b is at least sizeof(int) past a.
-  EXPECT_GE(reinterpret_cast<std::byte *>(b) - reinterpret_cast<std::byte *>(a),
+  EXPECT_GE(reinterpret_cast<std::byte*>(b) - reinterpret_cast<std::byte*>(a),
             static_cast<std::ptrdiff_t>(sizeof(int)));
 }
 
@@ -52,7 +52,7 @@ TEST(BumpAllocator, RespectsAlignment) {
   BumpAllocator<double> doubles(bump);
 
   (void)chars.allocate(1); // nudge cursor off double-alignment
-  double *p = doubles.allocate(1);
+  double* p = doubles.allocate(1);
 
   EXPECT_EQ(reinterpret_cast<std::uintptr_t>(p) % alignof(double), 0u);
 }
@@ -119,7 +119,7 @@ TEST(BumpAllocator, MarkRestore) {
 TEST(BumpAllocator, DeallocateDoesNothing) {
   Bump bump(256);
   BumpAllocator<int> alloc(bump);
-  int *p = alloc.allocate(1);
+  int* p = alloc.allocate(1);
   std::size_t usedBefore = bump.used();
   alloc.deallocate(p, 1);
   EXPECT_EQ(bump.used(), usedBefore); // cursor unchanged

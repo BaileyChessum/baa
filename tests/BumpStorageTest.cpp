@@ -148,7 +148,7 @@ TEST(Bump, MoveAssignment) {
 
 TEST(Bump, SelfMoveAssignment) {
   Bump s(256);
-  auto *self = &s;
+  auto* self = &s;
   *self = std::move(s); // must not crash or corrupt
 }
 
@@ -156,7 +156,7 @@ TEST(Bump, SelfMoveAssignment) {
 
 TEST(Bump, EmplaceDefaultConstruct) {
   Bump s(256);
-  int &x = s.emplace<int>();
+  int& x = s.emplace<int>();
   x = 42;
   EXPECT_EQ(x, 42);
   EXPECT_GT(s.used(), 0u);
@@ -167,7 +167,7 @@ TEST(Bump, EmplaceWithArgs) {
     int x, y;
   };
   Bump s(256);
-  Point &p = s.emplace<Point>(3, 7);
+  Point& p = s.emplace<Point>(3, 7);
   EXPECT_EQ(p.x, 3);
   EXPECT_EQ(p.y, 7);
 }
@@ -175,7 +175,7 @@ TEST(Bump, EmplaceWithArgs) {
 TEST(Bump, EmplaceAlignment) {
   Bump s(512);
   (void)s.emplace<char>(); // nudge cursor
-  double &d = s.emplace<double>();
+  double& d = s.emplace<double>();
   EXPECT_EQ(reinterpret_cast<std::uintptr_t>(&d) % alignof(double), 0u);
 }
 

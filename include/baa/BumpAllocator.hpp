@@ -26,9 +26,10 @@ class BumpAllocator {
 public:
   using value_type = T;
 
-  explicit BumpAllocator(Bump &bump) noexcept : bump(&bump) {}
+  explicit BumpAllocator(Bump& bump) noexcept : bump(&bump) {}
 
-  template <typename U> explicit BumpAllocator(const BumpAllocator<U> &other) noexcept : bump(other.bump) {}
+  template <typename U>
+  explicit BumpAllocator(const BumpAllocator<U>& other) noexcept : bump(other.bump) {}
 
   /**
    * @brief Allocate space for `n` objects of type `T`.
@@ -36,29 +37,32 @@ public:
    * @return Pointer to suitably aligned storage for `n` objects.
    * @throws std::bad_alloc The request overflows or the arena cannot satisfy the allocation.
    */
-  [[nodiscard]] T *allocate(const std::size_t n) {
+  [[nodiscard]] T* allocate(const std::size_t n) {
     // Reject counts that would overflow the byte-size multiplication below.
     if (n > static_cast<std::size_t>(-1) / sizeof(T)) [[unlikely]]
       throw std::bad_alloc{};
 
-    std::byte *raw = bump->allocate(sizeof(T) * n, alignof(T));
+    std::byte* raw = bump->template allocate<alignof(T)>(sizeof(T) * n);
     if (!raw) [[unlikely]]
       throw std::bad_alloc{};
 
-    return reinterpret_cast<T *>(raw);
+    return reinterpret_cast<T*>(raw);
   }
 
   /**
    * @brief No-op deallocation hook for allocator-aware code.
    * @warning Memory is reclaimed only in bulk via `Bump::reset()` or `Bump::restore()`.
    */
-  void deallocate(T *, std::size_t) noexcept {}
+  void deallocate(T*, std::size_t) noexcept {}
 
   /// @return `true` when both allocators reference the same backing `Bump`.
-  template <typename U> bool operator==(const BumpAllocator<U> &other) const noexcept { return bump == other.bump; }
+  template <typename U>
+  bool operator==(const BumpAllocator<U>& other) const noexcept {
+    return bump == other.bump;
+  }
 
 private:
-  Bump *bump;
+  Bump* bump;
 
   template <typename U>
     requires std::is_trivially_destructible_v<U>

@@ -67,29 +67,33 @@ constexpr std::size_t parserWorkingSetBytes(std::size_t depth) {
   return total * depth;
 }
 
-template <typename T> void fillVector(std::vector<T, BumpAllocator<T>> &values, std::size_t count) {
+template <typename T>
+void fillVector(std::vector<T, BumpAllocator<T>>& values, std::size_t count) {
   for (std::size_t i = 0; i < count; ++i)
     values.push_back(T{});
 }
 
-template <> void fillVector(std::vector<int, BumpAllocator<int>> &values, std::size_t count) {
+template <>
+void fillVector(std::vector<int, BumpAllocator<int>>& values, std::size_t count) {
   for (std::size_t i = 0; i < count; ++i)
     values.push_back(static_cast<int>(i));
 }
 
-template <> void fillVector(std::vector<SmallRecord, BumpAllocator<SmallRecord>> &values, std::size_t count) {
+template <>
+void fillVector(std::vector<SmallRecord, BumpAllocator<SmallRecord>>& values, std::size_t count) {
   for (std::size_t i = 0; i < count; ++i)
   {
     values.push_back(SmallRecord{static_cast<std::uint32_t>(i), static_cast<std::uint32_t>(i ^ 0x55u), i});
   }
 }
 
-template <> void fillVector(std::vector<MediumRecord, BumpAllocator<MediumRecord>> &values, std::size_t count) {
+template <>
+void fillVector(std::vector<MediumRecord, BumpAllocator<MediumRecord>>& values, std::size_t count) {
   for (std::size_t i = 0; i < count; ++i)
     values.push_back(MediumRecord{i, i + 1u, i + 2u, i + 3u});
 }
 
-std::size_t parserStep(Bump &bump, unsigned sizeClass) {
+std::size_t parserStep(Bump& bump, unsigned sizeClass) {
   switch (sizeClass)
   {
   case 8: {
@@ -121,7 +125,7 @@ std::size_t parserStep(Bump &bump, unsigned sizeClass) {
   }
 }
 
-static void BM_ParserStyleScratch(benchmark::State &state) {
+static void BM_ParserStyleScratch(benchmark::State& state) {
   const bool useUnsafeRestore = state.range(0) != 0;
   constexpr std::size_t kDepth = 32;
   Bump bump(parserWorkingSetBytes(kDepth) + 4096);
@@ -158,7 +162,8 @@ static void BM_ParserStyleScratch(benchmark::State &state) {
   state.SetBytesProcessed(state.iterations() * static_cast<std::int64_t>(parserWorkingSetBytes(kDepth)));
 }
 
-template <typename T> static void BM_VectorGrowth(benchmark::State &state) {
+template <typename T>
+static void BM_VectorGrowth(benchmark::State& state) {
   constexpr std::size_t kVectorCount = 48;
   const std::size_t elementCount = static_cast<std::size_t>(state.range(0));
   const std::size_t bytesPerVector = sizeof(T) * elementCount;

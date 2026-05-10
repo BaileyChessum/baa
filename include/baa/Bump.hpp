@@ -5,8 +5,6 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <limits>
 #include <memory>
 #include <new>
 #include <span>
@@ -34,15 +32,15 @@ public:
 
   ~Bump() = default;
 
-  Bump(const Bump &) = delete;
-  Bump &operator=(const Bump &) = delete;
+  Bump(const Bump&) = delete;
+  Bump& operator=(const Bump&) = delete;
 
-  Bump(Bump &&other) noexcept : buffer(std::move(other.buffer)), cursor(other.cursor), end(other.end) {
+  Bump(Bump&& other) noexcept : buffer(std::move(other.buffer)), cursor(other.cursor), end(other.end) {
     other.cursor = nullptr;
     other.end = nullptr;
   }
 
-  Bump &operator=(Bump &&other) noexcept {
+  Bump& operator=(Bump&& other) noexcept {
     if (this != &other)
     {
       buffer = std::move(other.buffer);
@@ -66,9 +64,9 @@ public:
    */
   template <typename T, typename... Args>
     requires std::is_trivially_destructible_v<T> && std::constructible_from<T, Args...>
-  [[nodiscard]] T &emplace(Args &&...args) {
+  [[nodiscard]] T& emplace(Args&&... args) {
     const BumpMark saved = mark();
-    std::byte *raw = allocate(sizeof(T), alignof(T));
+    std::byte* raw = allocate<alignof(T)>(sizeof(T));
     if (!raw) [[unlikely]]
       throw std::bad_alloc{};
 
@@ -97,14 +95,15 @@ public:
       return {};
 
     const BumpMark saved = mark();
-    if (count > std::numeric_limits<std::size_t>::max() / sizeof(T)) [[unlikely]]
+    // Spell this directly so the header does not need <limits>.
+    if (count > static_cast<std::size_t>(-1) / sizeof(T)) [[unlikely]]
       throw std::bad_alloc{};
 
-    std::byte *raw = allocate(sizeof(T) * count, alignof(T));
+    std::byte* raw = allocate<alignof(T)>(sizeof(T) * count);
     if (!raw) [[unlikely]]
       throw std::bad_alloc{};
 
-    T *ptr = reinterpret_cast<T *>(raw);
+    T* ptr = reinterpret_cast<T*>(raw);
     try
     {
       for (std::size_t i = 0; i < count; ++i)
@@ -131,7 +130,12 @@ public:
    * @return `true` when the mark is accepted; `false` when it lies outside this arena's buffer.
    */
   [[nodiscard]] bool restore(const BumpMark m) noexcept {
-    if (constexpr std::less<> before; before(m.cursor, buffer.get()) || before(end, m.cursor)) [[unlikely]]
+    // Compare integer addresses directly so the header does not need <functional> for std::less<>.
+    const auto begin_addr = reinterpret_cast<std::uintptr_t>(buffer.get());
+    const auto mark_addr = reinterpret_cast<std::uintptr_t>(m.cursor);
+    const auto end_addr = reinterpret_cast<std::uintptr_t>(end);
+
+    if (mark_addr < begin_addr || mark_addr > end_addr) [[unlikely]]
       return false;
 
     restore_unsafe(m);
@@ -165,20 +169,22 @@ public:
 
 private:
   /**
-   * @brief Align the cursor up to `alignment`, then advance it by `size` bytes.
+   * @brief Align the cursor up to `Alignment`, then advance it by `size` bytes.
+   * @tparam Alignment Required alignment. Must be a non-zero power of two.
    * @param size Bytes to reserve after alignment.
-   * @param alignment Required alignment. Must be a non-zero power of two.
    * @return Pointer to the aligned region, or `nullptr` when the request cannot be satisfied.
    */
-  [[nodiscard]] std::byte *allocate(const std::size_t size, const std::size_t alignment) noexcept {
-    // `cursor == nullptr` keeps moved-from Bump objects inert,
-    // `alignment & (alignment - 1)` is non-zero when alignment is not a power of two
-    if (cursor == nullptr || alignment == 0 || (alignment & (alignment - 1)) != 0) [[unlikely]]
+  template <std::size_t Alignment>
+  [[nodiscard]] std::byte* allocate(const std::size_t size) noexcept {
+    static_assert(Alignment != 0);
+    static_assert((Alignment & (Alignment - 1)) == 0);
+
+    if (cursor == nullptr) [[unlikely]]
       return nullptr;
 
     const auto addr = reinterpret_cast<std::uintptr_t>(cursor);
-    const auto misalignment = addr & (alignment - 1);
-    const auto padding = misalignment == 0 ? 0 : alignment - misalignment;
+    const auto misalignment = addr & (Alignment - 1);
+    const auto padding = misalignment == 0 ? 0 : Alignment - misalignment;
 
     if (const auto available = static_cast<std::size_t>(end - cursor);
         padding > available || size > available - padding) [[unlikely]]
@@ -194,8 +200,8 @@ private:
   friend class BumpAllocator;
 
   std::unique_ptr<std::byte[]> buffer;
-  std::byte *cursor;
-  std::byte *end;
+  std::byte* cursor;
+  std::byte* end;
 };
 
 } // namespace baa
