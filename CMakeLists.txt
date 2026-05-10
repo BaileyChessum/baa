@@ -17,7 +17,7 @@ target_include_directories(baa INTERFACE
 target_compile_features(baa INTERFACE cxx_std_20)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    target_compile_options(baa INTERFACE -Wall -Wextra -Wpedantic -Wconversion)
+    target_compile_options(baa INTERFACE -Wall -Wextra -Wpedantic -Wconversion -Werror)
 endif()
 
 # Build options

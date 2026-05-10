@@ -5,10 +5,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <type_traits>
 
 namespace baa {
 
 template <typename T>
+  requires std::is_trivially_destructible_v<T>
 class BumpAllocator;
 
 /// Owns a heap-allocated byte buffer and the cursor tracking the current allocation position.
@@ -91,6 +93,7 @@ private:
   }
 
   template <typename T>
+    requires std::is_trivially_destructible_v<T>
   friend class BumpAllocator;
 
   std::unique_ptr<std::byte[]> buffer;
