@@ -53,12 +53,12 @@ public:
 
   /// Save the current cursor position. Pass the returned mark to restore() to reclaim all
   /// allocations made after this point.
-  [[nodiscard]] BumpMark mark() const noexcept { return {buffer.get(), used()}; }
+  [[nodiscard]] BumpMark mark() const noexcept { return {cursor}; }
 
   /// Restore the cursor to a previously saved mark. Returns false when the mark belongs to a
-  /// different backing buffer or points past the end of this Bump.
+  /// @warning different backing buffer or points past the end of this Bump.
   [[nodiscard]] bool restore(BumpMark m) noexcept {
-    if (m.buffer != buffer.get() || m.offset > capacity()) [[unlikely]]
+    if (m.cursor < buffer.get() || m.cursor > end) [[unlikely]]
       return false;
 
     restore_unsafe(m);
@@ -68,7 +68,7 @@ public:
   /// Restore the cursor to a previously saved mark without validation.
   /// The caller must ensure that the mark came from this backing buffer.
   void restore_unsafe(BumpMark m) noexcept {
-    cursor = buffer.get() + static_cast<std::ptrdiff_t>(m.offset);
+    cursor = m.cursor;
   }
 
   /// Reset the cursor to the beginning of the buffer. Invalidates all outstanding pointers.
