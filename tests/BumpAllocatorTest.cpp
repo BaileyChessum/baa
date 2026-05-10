@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <limits>
 #include <new>
 #include <vector>
 
@@ -65,6 +66,13 @@ TEST(BumpAllocator, ExhaustionThrowsBadAlloc) {
   EXPECT_THROW((void)alloc.allocate(1), std::bad_alloc);
 }
 
+TEST(BumpAllocator, OversizedAllocationThrowsBadAlloc) {
+  Bump bump(256);
+  BumpAllocator<int> alloc(bump);
+  std::size_t oversized = std::numeric_limits<std::size_t>::max() / sizeof(int) + 1;
+  EXPECT_THROW((void)alloc.allocate(oversized), std::bad_alloc);
+}
+
 // --- Bump accounting --------------------------------------------------------
 
 TEST(BumpAllocator, UsedIncreasesAfterAllocate) {
@@ -73,6 +81,16 @@ TEST(BumpAllocator, UsedIncreasesAfterAllocate) {
   EXPECT_EQ(bump.used(), 0u);
   (void)alloc.allocate(1);
   EXPECT_GE(bump.used(), sizeof(int));
+}
+
+TEST(BumpAllocator, FailedOversizedAllocationDoesNotAdvanceCursor) {
+  Bump bump(256);
+  BumpAllocator<int> alloc(bump);
+  std::size_t usedBefore = bump.used();
+  std::size_t oversized = std::numeric_limits<std::size_t>::max() / sizeof(int) + 1;
+  EXPECT_THROW((void)alloc.allocate(oversized), std::bad_alloc);
+  EXPECT_EQ(bump.used(), usedBefore);
+  EXPECT_EQ(bump.used() + bump.remaining(), bump.capacity());
 }
 
 TEST(BumpAllocator, ResetReclaims) {
@@ -92,7 +110,7 @@ TEST(BumpAllocator, MarkRestore) {
   BumpMark m = bump.mark();
   (void)alloc.allocate(4);
   EXPECT_GT(bump.used(), usedAtMark);
-  bump.restore(m);
+  EXPECT_TRUE(bump.restore(m));
   EXPECT_EQ(bump.used(), usedAtMark);
 }
 

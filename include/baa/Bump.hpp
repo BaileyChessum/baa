@@ -53,11 +53,23 @@ public:
 
   /// Save the current cursor position. Pass the returned mark to restore() to reclaim all
   /// allocations made after this point.
-  [[nodiscard]] BumpMark mark() const noexcept { return {cursor}; }
+  [[nodiscard]] BumpMark mark() const noexcept { return {buffer.get(), used()}; }
 
-  /// Restore the cursor to a previously saved mark. All allocations made after the mark was
-  /// taken are invalidated. The mark must have been obtained from this Bump object.
-  void restore(BumpMark m) noexcept { cursor = m.cursor; }
+  /// Restore the cursor to a previously saved mark. Returns false when the mark belongs to a
+  /// different backing buffer or points past the end of this Bump.
+  [[nodiscard]] bool restore(BumpMark m) noexcept {
+    if (m.buffer != buffer.get() || m.offset > capacity()) [[unlikely]]
+      return false;
+
+    restore_unsafe(m);
+    return true;
+  }
+
+  /// Restore the cursor to a previously saved mark without validation.
+  /// The caller must ensure that the mark came from this backing buffer.
+  void restore_unsafe(BumpMark m) noexcept {
+    cursor = buffer.get() + static_cast<std::ptrdiff_t>(m.offset);
+  }
 
   /// Reset the cursor to the beginning of the buffer. Invalidates all outstanding pointers.
   void reset() noexcept { cursor = buffer.get(); }
@@ -82,12 +94,18 @@ private:
   /// Align the cursor up to `alignment`, then advance it by `size` bytes.
   /// Returns a pointer to the aligned region, or nullptr if the buffer is exhausted.
   [[nodiscard]] std::byte* allocate(std::size_t size, std::size_t alignment) noexcept {
-    auto addr    = reinterpret_cast<std::uintptr_t>(cursor);
-    auto aligned = reinterpret_cast<std::byte*>((addr + alignment - 1) & ~(alignment - 1));
-
-    if (aligned + size > end)
+    if (cursor == nullptr || alignment == 0 || (alignment & (alignment - 1)) != 0) [[unlikely]]
       return nullptr;
 
+    auto addr    = reinterpret_cast<std::uintptr_t>(cursor);
+    auto misalignment = addr & (alignment - 1);
+    auto padding      = misalignment == 0 ? 0 : alignment - misalignment;
+
+    auto available = static_cast<std::size_t>(end - cursor);
+    if (padding > available || size > available - padding) [[unlikely]]
+      return nullptr;
+
+    auto aligned = cursor + static_cast<std::ptrdiff_t>(padding);
     cursor = aligned + size;
     return aligned;
   }

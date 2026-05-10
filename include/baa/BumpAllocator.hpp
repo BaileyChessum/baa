@@ -26,8 +26,11 @@ public:
 
   /// Allocate space for n objects of type T. Throws std::bad_alloc if the Bump is exhausted.
   [[nodiscard]] T* allocate(std::size_t n) {
+    if (n > static_cast<std::size_t>(-1) / sizeof(T)) [[unlikely]]
+      throw std::bad_alloc{};
+
     std::byte* raw = bump->allocate(sizeof(T) * n, alignof(T));
-    if (!raw)
+    if (!raw) [[unlikely]]
       throw std::bad_alloc{};
     return reinterpret_cast<T*>(raw);
   }

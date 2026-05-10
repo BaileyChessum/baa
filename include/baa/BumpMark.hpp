@@ -4,10 +4,10 @@
 
 namespace baa {
 
-/// Opaque cursor snapshot for use with Bump::mark() and Bump::restore().
-/// A mark is invalidated by any call to Bump::reset() or by restoring an earlier mark.
+/// Cursor snapshot for use with Bump::mark() and Bump::restore().
 struct BumpMark {
-  std::byte* cursor;
+  std::byte*  buffer = nullptr;
+  std::size_t offset = 0;
 };
 
 } // namespace baa
