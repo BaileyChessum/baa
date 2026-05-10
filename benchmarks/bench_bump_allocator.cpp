@@ -135,7 +135,7 @@ static void BM_ParserStyleScratch(benchmark::State& state) {
     benchmark::DoNotOptimize(bump.remaining());
     for (std::size_t outer = 0; outer < kDepth; ++outer)
     {
-      BumpMark mark = bump.mark();
+      BumpMarker mark = bump.mark();
       std::size_t checksum = outer;
       for (unsigned sizeClass : kParserPattern)
       {

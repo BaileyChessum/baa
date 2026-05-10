@@ -68,14 +68,14 @@ static_assert(!std::is_trivially_destructible_v<ThrowsOnThirdDefault>);
 } // namespace
 
 TEST(Arena, InitialState) {
-  Arena arena(256);
+  const Arena arena(256);
   EXPECT_EQ(arena.capacity(), 256u);
   EXPECT_EQ(arena.used(), 0u);
   EXPECT_EQ(arena.remaining(), 256u);
 }
 
 TEST(Arena, ZeroInitialCapacity) {
-  Arena arena(0);
+  const Arena arena(0);
   EXPECT_EQ(arena.capacity(), 0u);
   EXPECT_EQ(arena.used(), 0u);
   EXPECT_EQ(arena.remaining(), 0u);
@@ -136,7 +136,7 @@ TEST(Arena, RestoreUnsafeDestroysOwnedObjectsAcrossPages) {
 
   Arena arena(64);
   (void)arena.emplace<LifetimeTracker>(1);
-  ArenaMarker marker = arena.mark();
+  const ArenaMarker marker = arena.mark();
   (void)arena.emplace_array<LifetimeTracker>(4);
 
   arena.restore_unsafe(marker);
@@ -149,7 +149,7 @@ TEST(Arena, ResetInvalidatesMarkers) {
 
   Arena arena(64);
   (void)arena.emplace<LifetimeTracker>(1);
-  ArenaMarker marker = arena.mark();
+  const ArenaMarker marker = arena.mark();
   (void)arena.emplace_array<LifetimeTracker>(3);
 
   arena.reset();
