@@ -2,6 +2,9 @@ BasedOnStyle: LLVM
 ColumnLimit: 120
 IndentWidth: 2
 AccessModifierOffset: -2
+PointerAlignment: Left
+ReferenceAlignment: Left
+AlwaysBreakTemplateDeclarations: Yes
 BreakBeforeBraces: Custom
 BraceWrapping:
   AfterControlStatement: Always
