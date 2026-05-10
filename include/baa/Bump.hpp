@@ -1,7 +1,7 @@
 #pragma once
 
 #include <baa/BumpCheckpoint.hpp>
-#include <baa/BumpMark.hpp>
+#include <baa/BumpMarker.hpp>
 
 #include <concepts>
 #include <cstddef>
@@ -66,7 +66,7 @@ public:
   template <typename T, typename... Args>
     requires std::is_trivially_destructible_v<T> && std::constructible_from<T, Args...>
   [[nodiscard]] T& emplace(Args&&... args) {
-    const BumpMark saved = mark();
+    const BumpMarker saved = mark();
     std::byte* raw = allocate<alignof(T)>(sizeof(T));
     if (!raw) [[unlikely]]
       throw std::bad_alloc{};
@@ -95,7 +95,7 @@ public:
     if (count == 0)
       return {};
 
-    const BumpMark saved = mark();
+    const BumpMarker saved = mark();
     // Spell this directly so the header does not need <limits>.
     if (count > static_cast<std::size_t>(-1) / sizeof(T)) [[unlikely]]
       throw std::bad_alloc{};
@@ -125,7 +125,7 @@ public:
    * scope-bounded temporary allocation that should roll back automatically unless released.
    * @return A mark that can later be passed to `restore()` or `restore_unsafe()`.
    */
-  [[nodiscard]] BumpMark mark() const noexcept { return {cursor}; }
+  [[nodiscard]] BumpMarker mark() const noexcept { return {cursor}; }
 
   /**
    * @brief Create a scope guard that restores this arena unless released.
@@ -135,7 +135,7 @@ public:
    * allocations and disables rollback.
    */
   [[nodiscard]] BumpCheckpoint checkpoint() noexcept {
-    return BumpCheckpoint(this, mark(), [](Bump* bump, const BumpMark saved) noexcept { bump->restore_unsafe(saved); });
+    return BumpCheckpoint(this, mark());
   }
 
   /**
@@ -145,7 +145,7 @@ public:
    * @note This is the low-level explicit checkpoint primitive. Prefer `checkpoint()` unless you
    * need manual mark management.
    */
-  [[nodiscard]] bool restore(const BumpMark m) noexcept {
+  [[nodiscard]] bool restore(const BumpMarker m) noexcept {
     // Compare integer addresses directly so the header does not need <functional> for std::less<>.
     const auto begin_addr = reinterpret_cast<std::uintptr_t>(buffer.get());
     const auto mark_addr = reinterpret_cast<std::uintptr_t>(m.cursor);
@@ -165,7 +165,7 @@ public:
    * @note This is intended for internal or otherwise guaranteed-valid marks such as those held by
    * `BumpCheckpoint`.
    */
-  void restore_unsafe(const BumpMark m) noexcept { cursor = m.cursor; }
+  void restore_unsafe(const BumpMarker m) noexcept { cursor = m.cursor; }
 
   /**
    * @brief Reset the cursor to the beginning of the buffer.
@@ -222,5 +222,17 @@ private:
   std::byte* cursor;
   std::byte* end;
 };
+
+inline BumpCheckpoint::~BumpCheckpoint() noexcept {
+  rollback();
+}
+
+inline void BumpCheckpoint::rollback() noexcept {
+  if (!active())
+    return;
+
+  bump->restore_unsafe(mark);
+  release();
+}
 
 } // namespace baa

@@ -71,7 +71,7 @@ TEST(Bump, ResetOnFreshStorage) {
 
 TEST(Bump, MarkRestoreOnFreshStorage) {
   Bump s(256);
-  BumpMark m = s.mark();
+  BumpMarker m = s.mark();
   EXPECT_TRUE(s.restore(m));
   EXPECT_EQ(s.used(), 0u);
   EXPECT_EQ(s.remaining(), s.capacity());
@@ -79,7 +79,7 @@ TEST(Bump, MarkRestoreOnFreshStorage) {
 
 TEST(Bump, RestoreUnsafeOnFreshStorage) {
   Bump s(256);
-  BumpMark m = s.mark();
+  BumpMarker m = s.mark();
   s.restore_unsafe(m);
   EXPECT_EQ(s.used(), 0u);
   EXPECT_EQ(s.remaining(), s.capacity());
@@ -89,7 +89,7 @@ TEST(Bump, ResetInvalidatesMarks) {
   Bump s(256);
   BumpAllocator<int> alloc(s);
   (void)alloc.allocate(4);
-  BumpMark m = s.mark();
+  BumpMarker m = s.mark();
   s.reset();
   EXPECT_TRUE(s.restore(m));
   EXPECT_EQ(s.used(), 4u * sizeof(int));
@@ -99,7 +99,7 @@ TEST(Bump, ResetInvalidatesMarks) {
 TEST(Bump, RejectsForeignMarks) {
   Bump a(256);
   Bump b(256);
-  BumpMark m = a.mark();
+  BumpMarker m = a.mark();
   EXPECT_FALSE(b.restore(m));
   EXPECT_EQ(b.used() + b.remaining(), b.capacity());
 }
@@ -244,7 +244,7 @@ TEST(Bump, MarkSurvivesMoveConstruction) {
   Bump a(128);
   BumpAllocator<int> alloc(a);
   (void)alloc.allocate(4);
-  BumpMark m = a.mark();
+  BumpMarker m = a.mark();
   (void)alloc.allocate(4);
 
   Bump b(std::move(a));
@@ -256,7 +256,7 @@ TEST(Bump, RestoreUnsafeSurvivesMoveConstruction) {
   Bump a(128);
   BumpAllocator<int> alloc(a);
   (void)alloc.allocate(4);
-  BumpMark m = a.mark();
+  BumpMarker m = a.mark();
   (void)alloc.allocate(4);
 
   Bump b(std::move(a));

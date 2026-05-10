@@ -4,8 +4,11 @@
 
 namespace baa {
 
-/// Snapshot for use with FixedArena::mark(), restore(), and restore_unsafe().
-struct FixedArenaMark {
+struct ArenaPage;
+
+/// Snapshot for use with Arena::mark(), restore(), and restore_unsafe().
+struct ArenaMarker {
+  ArenaPage* page = nullptr;
   std::byte* cursor = nullptr;
   std::byte* destructor_head = nullptr;
 };

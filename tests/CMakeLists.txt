@@ -3,6 +3,7 @@ find_package(GTest REQUIRED)
 include(GoogleTest)
 
 add_executable(baa_tests
+  ArenaTest.cpp
   BumpStorageTest.cpp
   BumpAllocatorTest.cpp
   FixedArenaTest.cpp

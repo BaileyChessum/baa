@@ -93,7 +93,7 @@ TEST(FixedArena, RestoreDestroysOwnedObjectsAfterMark) {
 
   FixedArena arena(512);
   (void)arena.emplace<LifetimeTracker>(1);
-  FixedArenaMark mark = arena.mark();
+  FixedArenaMarker mark = arena.mark();
   (void)arena.emplace<LifetimeTracker>(2);
   (void)arena.emplace<LifetimeTracker>(3);
 
@@ -109,7 +109,7 @@ TEST(FixedArena, RestoreUnsafeDestroysOwnedObjectsAfterMark) {
 
   FixedArena arena(512);
   (void)arena.emplace<LifetimeTracker>(1);
-  FixedArenaMark mark = arena.mark();
+  FixedArenaMarker mark = arena.mark();
   (void)arena.emplace<LifetimeTracker>(2);
 
   arena.restore_unsafe(mark);
@@ -123,7 +123,7 @@ TEST(FixedArena, ResetInvalidatesTrackedMarks) {
 
   FixedArena arena(512);
   (void)arena.emplace<LifetimeTracker>(1);
-  FixedArenaMark mark = arena.mark();
+  FixedArenaMarker mark = arena.mark();
   (void)arena.emplace<LifetimeTracker>(2);
 
   arena.reset();
@@ -134,7 +134,7 @@ TEST(FixedArena, ResetInvalidatesTrackedMarks) {
 TEST(FixedArena, RejectsForeignMarks) {
   FixedArena a(256);
   FixedArena b(256);
-  FixedArenaMark mark = a.mark();
+  FixedArenaMarker mark = a.mark();
 
   EXPECT_FALSE(b.restore(mark));
   EXPECT_EQ(b.used(), 0u);
@@ -340,7 +340,7 @@ TEST(FixedArena, MarkSurvivesMoveConstruction) {
 
   FixedArena a(512);
   (void)a.emplace<LifetimeTracker>(1);
-  FixedArenaMark mark = a.mark();
+  FixedArenaMarker mark = a.mark();
   (void)a.emplace<LifetimeTracker>(2);
 
   FixedArena b(std::move(a));

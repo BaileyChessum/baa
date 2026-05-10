@@ -107,7 +107,7 @@ TEST(BumpAllocator, MarkRestore) {
   BumpAllocator<int> alloc(bump);
   (void)alloc.allocate(4);
   std::size_t usedAtMark = bump.used();
-  BumpMark m = bump.mark();
+  BumpMarker m = bump.mark();
   (void)alloc.allocate(4);
   EXPECT_GT(bump.used(), usedAtMark);
   EXPECT_TRUE(bump.restore(m));

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <baa/BumpMark.hpp>
+#include <baa/BumpMarker.hpp>
 
 namespace baa {
 
@@ -14,13 +14,13 @@ class Bump;
 class BumpCheckpoint {
 public:
   BumpCheckpoint() noexcept = default;
-  ~BumpCheckpoint() { rollback(); }
+  ~BumpCheckpoint() noexcept;
 
   BumpCheckpoint(const BumpCheckpoint&) = delete;
   BumpCheckpoint& operator=(const BumpCheckpoint&) = delete;
 
   BumpCheckpoint(BumpCheckpoint&& other) noexcept
-      : bump(other.bump), mark(other.mark), restore_fn(other.restore_fn) {
+      : bump(other.bump), mark(other.mark) {
     other.release();
   }
 
@@ -30,42 +30,30 @@ public:
       rollback();
       bump = other.bump;
       mark = other.mark;
-      restore_fn = other.restore_fn;
       other.release();
     }
     return *this;
   }
 
   /// Restore immediately when still active, then deactivate the guard.
-  void rollback() noexcept {
-    if (!active())
-      return;
-
-    restore_fn(bump, mark);
-    release();
-  }
+  void rollback() noexcept;
 
   /// Deactivate the guard without changing arena state.
   void release() noexcept {
     bump = nullptr;
     mark = {};
-    restore_fn = nullptr;
   }
 
   /// @return `true` when this guard still owns rollback responsibility.
-  [[nodiscard]] bool active() const noexcept { return restore_fn != nullptr; }
+  [[nodiscard]] bool active() const noexcept { return bump != nullptr; }
 
 private:
-  using RestoreFn = void (*)(Bump*, BumpMark) noexcept;
-
-  BumpCheckpoint(Bump* owner, const BumpMark saved, RestoreFn restore) noexcept
-      : bump(owner), mark(saved), restore_fn(restore) {}
+  BumpCheckpoint(Bump* owner, const BumpMarker saved) noexcept : bump(owner), mark(saved) {}
 
   friend class Bump;
 
   Bump* bump = nullptr;
-  BumpMark mark{};
-  RestoreFn restore_fn = nullptr;
+  BumpMarker mark{};
 };
 
 } // namespace baa

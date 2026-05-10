@@ -1,7 +1,7 @@
 #pragma once
 
 #include <baa/FixedArenaCheckpoint.hpp>
-#include <baa/FixedArenaMark.hpp>
+#include <baa/FixedArenaMarker.hpp>
 
 #include <concepts>
 #include <cstddef>
@@ -77,7 +77,7 @@ public:
   template <typename T, typename... Args>
     requires std::constructible_from<T, Args...>
   [[nodiscard]] T& emplace(Args&&... args) {
-    const FixedArenaMark saved = mark();
+    const FixedArenaMarker saved = mark();
     std::byte* raw = allocate<alignof(T)>(sizeof(T));
     if (!raw) [[unlikely]]
       throw std::bad_alloc{};
@@ -126,7 +126,7 @@ public:
     if (count > static_cast<std::size_t>(-1) / sizeof(T)) [[unlikely]]
       throw std::bad_alloc{};
 
-    const FixedArenaMark saved = mark();
+    const FixedArenaMarker saved = mark();
     std::byte* raw = allocate<alignof(T)>(sizeof(T) * count);
     if (!raw) [[unlikely]]
       throw std::bad_alloc{};
@@ -168,7 +168,7 @@ public:
    * scope-bounded temporary allocation that should roll back automatically unless released.
    * @return A mark that can later be passed to `restore()` or `restore_unsafe()`.
    */
-  [[nodiscard]] FixedArenaMark mark() const noexcept { return {cursor, reinterpret_cast<std::byte*>(destructor_head)}; }
+  [[nodiscard]] FixedArenaMarker mark() const noexcept { return {cursor, reinterpret_cast<std::byte*>(destructor_head)}; }
 
   /**
    * @brief Create a scope guard that restores this arena unless released.
@@ -178,8 +178,7 @@ public:
    * objects created since the checkpoint was taken. `release()` keeps current allocations.
    */
   [[nodiscard]] FixedArenaCheckpoint checkpoint() noexcept {
-    return FixedArenaCheckpoint(this, mark(),
-                                [](FixedArena* arena, const FixedArenaMark saved) noexcept { arena->restore_unsafe(saved); });
+    return FixedArenaCheckpoint(this, mark());
   }
 
   /**
@@ -193,7 +192,7 @@ public:
    * This is the low-level explicit checkpoint primitive. Prefer `checkpoint()` unless you need
    * manual mark management.
    */
-  [[nodiscard]] bool restore(const FixedArenaMark m) noexcept {
+  [[nodiscard]] bool restore(const FixedArenaMarker m) noexcept {
     if (!is_valid_mark(m)) [[unlikely]]
       return false;
 
@@ -208,7 +207,7 @@ public:
    * @note This is intended for internal or otherwise guaranteed-valid marks such as those held by
    * `FixedArenaCheckpoint`.
    */
-  void restore_unsafe(const FixedArenaMark m) noexcept {
+  void restore_unsafe(const FixedArenaMarker m) noexcept {
     destroy_tracked_until(reinterpret_cast<DestructorNode*>(m.destructor_head));
     cursor = m.cursor;
     destructor_head = reinterpret_cast<DestructorNode*>(m.destructor_head);
@@ -271,9 +270,9 @@ private:
     return raw ? reinterpret_cast<DestructorNode*>(raw) : nullptr;
   }
 
-  void restore_cursor_only(const FixedArenaMark m) noexcept { cursor = m.cursor; }
+  void restore_cursor_only(const FixedArenaMarker m) noexcept { cursor = m.cursor; }
 
-  [[nodiscard]] bool is_valid_mark(const FixedArenaMark m) const noexcept {
+  [[nodiscard]] bool is_valid_mark(const FixedArenaMarker m) const noexcept {
     const auto begin_addr = reinterpret_cast<std::uintptr_t>(buffer.get());
     const auto current_addr = reinterpret_cast<std::uintptr_t>(cursor);
 
@@ -337,5 +336,17 @@ private:
   std::byte* end;
   DestructorNode* destructor_head = nullptr;
 };
+
+inline FixedArenaCheckpoint::~FixedArenaCheckpoint() noexcept {
+  rollback();
+}
+
+inline void FixedArenaCheckpoint::rollback() noexcept {
+  if (!active())
+    return;
+
+  arena->restore_unsafe(mark);
+  release();
+}
 
 } // namespace baa

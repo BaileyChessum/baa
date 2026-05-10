@@ -5,7 +5,7 @@
 namespace baa {
 
 /// Cursor snapshot for use with Bump::mark() and Bump::restore().
-struct BumpMark {
+struct BumpMarker {
   std::byte* cursor = nullptr;
 };
 
