@@ -3,6 +3,7 @@
 #include <baa/ArenaCheckpoint.hpp>
 #include <baa/ArenaMarker.hpp>
 
+#include <algorithm>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +18,8 @@ namespace baa {
 template <typename T>
 class ArenaAllocator;
 
+namespace detail {
+
 struct ArenaPage {
   struct DestructorNode {
     DestructorNode* previous;
@@ -25,13 +28,19 @@ struct ArenaPage {
     void (*destroy)(void*, std::size_t) noexcept;
   };
 
+  static constexpr std::size_t kAlignment = alignof(std::max_align_t);
+
+  [[nodiscard]] std::byte* begin() const noexcept;
+
   ArenaPage* previous = nullptr;
-  std::byte* begin = nullptr;
-  std::byte* cursor = nullptr;
-  std::byte* end = nullptr;
-  DestructorNode* destructor_head = nullptr;
-  std::size_t usable_capacity = 0;
 };
+
+inline std::byte* ArenaPage::begin() const noexcept {
+  constexpr std::size_t header_bytes = (sizeof(ArenaPage) + kAlignment - 1) & ~(kAlignment - 1);
+  return reinterpret_cast<std::byte*>(const_cast<ArenaPage*>(this)) + header_bytes;
+}
+
+} // namespace detail
 
 /**
  * @brief Growable arena with page-chained allocation and optional destructor tracking.
@@ -47,11 +56,10 @@ struct ArenaPage {
 class Arena {
 public:
   /// Allocate the first page with `initial_capacity` usable bytes.
-  explicit Arena(const std::size_t initial_capacity)
-      : next_geometric_capacity(initial_capacity) {
-    first_page = allocate_page(initial_capacity, nullptr);
-    current_page = first_page;
-    total_capacity = initial_capacity;
+  explicit Arena(const std::size_t initial_capacity) {
+    current_page = allocate_page(initial_capacity, nullptr);
+    cursor = current_page->begin();
+    root_end = end = cursor + static_cast<std::ptrdiff_t>(initial_capacity);
   }
 
   ~Arena() { release_all_pages(); }
@@ -60,30 +68,30 @@ public:
   Arena& operator=(const Arena&) = delete;
 
   Arena(Arena&& other) noexcept
-      : first_page(other.first_page)
-      , current_page(other.current_page)
-      , total_capacity(other.total_capacity)
-      , next_geometric_capacity(other.next_geometric_capacity) {
-    other.first_page = nullptr;
+      : current_page(other.current_page), cursor(other.cursor), end(other.end), destructor_head(other.destructor_head),
+        root_end(other.root_end) {
     other.current_page = nullptr;
-    other.total_capacity = 0;
-    other.next_geometric_capacity = 0;
+    other.cursor = nullptr;
+    other.end = nullptr;
+    other.destructor_head = nullptr;
+    other.root_end = nullptr;
   }
 
   Arena& operator=(Arena&& other) noexcept {
-    if (this != &other)
-    {
+    if (this != &other) {
       release_all_pages();
 
-      first_page = other.first_page;
       current_page = other.current_page;
-      total_capacity = other.total_capacity;
-      next_geometric_capacity = other.next_geometric_capacity;
+      cursor = other.cursor;
+      end = other.end;
+      destructor_head = other.destructor_head;
+      root_end = other.root_end;
 
-      other.first_page = nullptr;
       other.current_page = nullptr;
-      other.total_capacity = 0;
-      other.next_geometric_capacity = 0;
+      other.cursor = nullptr;
+      other.end = nullptr;
+      other.destructor_head = nullptr;
+      other.root_end = nullptr;
     }
     return *this;
   }
@@ -104,17 +112,15 @@ public:
   [[nodiscard]] T& emplace(Args&&... args) {
     const ArenaMarker saved = mark();
 
-    ReservedStorage storage = reserve_storage<alignof(T)>(sizeof(T), !std::is_trivially_destructible_v<T>);
+    ReservedStorage storage = reserve_storage<alignof(T), !std::is_trivially_destructible_v<T>>(sizeof(T));
 
-    try
-    {
+    try {
       T* object = ::new (storage.object) T(std::forward<Args>(args)...);
       if constexpr (!std::is_trivially_destructible_v<T>)
-        link_node(storage.page, storage.node, object, 1, &destroy_range<T>);
+        link_node(storage.node, object, 1, &destroy_range<T>);
       return *object;
     }
-    catch (...)
-    {
+    catch (...) {
       restore_unsafe(saved);
       throw;
     }
@@ -140,24 +146,22 @@ public:
       throw std::bad_alloc{};
 
     const ArenaMarker saved = mark();
-    ReservedStorage storage = reserve_storage<alignof(T)>(sizeof(T) * count, !std::is_trivially_destructible_v<T>);
+    ReservedStorage storage = reserve_storage<alignof(T), !std::is_trivially_destructible_v<T>>(sizeof(T) * count);
     T* objects = reinterpret_cast<T*>(storage.object);
 
     std::size_t constructed = 0;
-    try
-    {
+    try {
       for (; constructed < count; ++constructed)
         ::new (objects + constructed) T();
     }
-    catch (...)
-    {
+    catch (...) {
       destroy_constructed_prefix(objects, constructed);
       restore_unsafe(saved);
       throw;
     }
 
     if constexpr (!std::is_trivially_destructible_v<T>)
-      link_node(storage.page, storage.node, objects, count, &destroy_range<T>);
+      link_node(storage.node, objects, count, &destroy_range<T>);
 
     return std::span<T>(objects, count);
   }
@@ -172,7 +176,7 @@ public:
     if (current_page == nullptr)
       return {};
 
-    return {current_page, current_page->cursor, reinterpret_cast<std::byte*>(current_page->destructor_head)};
+    return {current_page, cursor, end, static_cast<void*>(destructor_head)};
   }
 
   /**
@@ -191,7 +195,7 @@ public:
    *
    * Accepted markers must refer to a live page in the current chain, keep the cursor within
    * that page's currently valid range, and refer to the current destruction stack or one of its
-   * ancestors for the target page.
+   * ancestors.
    *
    * This is the low-level explicit checkpoint primitive. Prefer `checkpoint()` unless you need
    * manual marker management.
@@ -215,22 +219,18 @@ public:
     if (current_page == nullptr) [[unlikely]]
       return;
 
-    auto* target_page = marker.page;
-    auto* target_head = reinterpret_cast<ArenaPage::DestructorNode*>(marker.destructor_head);
+    auto* target_head = static_cast<detail::ArenaPage::DestructorNode*>(marker.destructor_head);
+    destroy_until(target_head);
 
-    while (current_page != target_page)
-    {
-      ArenaPage* doomed = current_page;
-      destroy_page_until(doomed, nullptr);
+    while (current_page != marker.page) {
+      detail::ArenaPage* doomed = current_page;
       current_page = doomed->previous;
-      total_capacity -= doomed->usable_capacity;
       deallocate_page(doomed);
     }
 
-    destroy_page_until(current_page, target_head);
-    current_page->cursor = marker.cursor;
-    current_page->destructor_head = target_head;
-    next_geometric_capacity = doubled_capacity(current_page->usable_capacity);
+    cursor = marker.cursor;
+    end = marker.end;
+    destructor_head = target_head;
   }
 
   /**
@@ -239,59 +239,40 @@ public:
    * including storage kept alive through `ArenaAllocator<T>`.
    */
   void reset() noexcept {
-    if (first_page == nullptr) [[unlikely]]
+    if (current_page == nullptr) [[unlikely]]
       return;
 
-    while (current_page != first_page)
-    {
-      ArenaPage* doomed = current_page;
-      destroy_page_until(doomed, nullptr);
+    destroy_until(nullptr);
+
+    while (current_page->previous != nullptr) {
+      detail::ArenaPage* doomed = current_page;
       current_page = doomed->previous;
-      total_capacity -= doomed->usable_capacity;
       deallocate_page(doomed);
     }
 
-    destroy_page_until(first_page, nullptr);
-    first_page->cursor = first_page->begin;
-    first_page->destructor_head = nullptr;
-    current_page = first_page;
-    total_capacity = first_page->usable_capacity;
-    next_geometric_capacity = doubled_capacity(first_page->usable_capacity);
+    cursor = current_page->begin();
+    end = root_end;
+    destructor_head = nullptr;
   }
-
-  /// Total usable capacity across all currently live pages.
-  [[nodiscard]] std::size_t capacity() const noexcept { return total_capacity; }
-
-  /**
-   * Bytes consumed so far.
-   * @note Earlier live pages are treated as fully consumed because forward allocation never reuses
-   * their tail slack without `restore()` or `reset()`.
-   */
-  [[nodiscard]] std::size_t used() const noexcept { return capacity() - remaining(); }
 
   /// Bytes remaining in the current page before another page allocation would be needed.
   [[nodiscard]] std::size_t remaining() const noexcept {
     if (current_page == nullptr)
       return 0;
 
-    return static_cast<std::size_t>(current_page->end - current_page->cursor);
+    return static_cast<std::size_t>(end - cursor);
   }
 
 private:
   struct ReservedStorage {
-    ArenaPage* page = nullptr;
     std::byte* object = nullptr;
-    ArenaPage::DestructorNode* node = nullptr;
+    detail::ArenaPage::DestructorNode* node = nullptr;
   };
 
-  static constexpr std::size_t page_alignment = alignof(std::max_align_t);
+  static constexpr std::size_t kPageHeaderBytes =
+      (sizeof(detail::ArenaPage) + detail::ArenaPage::kAlignment - 1) & ~(detail::ArenaPage::kAlignment - 1);
 
-  static std::size_t align_up_size(const std::size_t value, const std::size_t alignment) noexcept {
-    const std::size_t remainder = value % alignment;
-    return remainder == 0 ? value : value + (alignment - remainder);
-  }
-
-  static std::uintptr_t align_up_address(const std::uintptr_t value, const std::size_t alignment) noexcept {
+  static std::uintptr_t align_up(const std::uintptr_t value, const std::size_t alignment) noexcept {
     const std::uintptr_t mask = static_cast<std::uintptr_t>(alignment - 1);
     return (value + mask) & ~mask;
   }
@@ -304,161 +285,163 @@ private:
     return value * 2;
   }
 
-  [[nodiscard]] static ArenaPage* allocate_page(const std::size_t usable_capacity, ArenaPage* previous) {
-    const std::size_t header_bytes = sizeof(ArenaPage);
-    if (header_bytes > (std::numeric_limits<std::size_t>::max)() - (page_alignment - 1) ||
-        usable_capacity > (std::numeric_limits<std::size_t>::max)() - header_bytes - (page_alignment - 1))
+  [[nodiscard]] static detail::ArenaPage* allocate_page(const std::size_t usable_capacity,
+                                                        detail::ArenaPage* previous) {
+    if (usable_capacity > (std::numeric_limits<std::size_t>::max)() - kPageHeaderBytes)
       throw std::bad_alloc{};
 
-    void* raw = ::operator new(header_bytes + (page_alignment - 1) + usable_capacity);
-    auto* page = ::new (raw) ArenaPage{};
+    void* raw = ::operator new(kPageHeaderBytes + usable_capacity);
+    auto* page = ::new (raw) detail::ArenaPage{};
     page->previous = previous;
-
-    const auto raw_addr = reinterpret_cast<std::uintptr_t>(reinterpret_cast<std::byte*>(raw) + header_bytes);
-    page->begin = reinterpret_cast<std::byte*>(align_up_address(raw_addr, page_alignment));
-    page->cursor = page->begin;
-    page->end = page->begin + static_cast<std::ptrdiff_t>(usable_capacity);
-    page->destructor_head = nullptr;
-    page->usable_capacity = usable_capacity;
     return page;
   }
 
-  static void deallocate_page(ArenaPage* page) noexcept {
+  static void deallocate_page(detail::ArenaPage* page) noexcept {
     page->~ArenaPage();
     ::operator delete(page);
   }
 
   void release_all_pages() noexcept {
-    while (current_page != nullptr)
-    {
-      ArenaPage* doomed = current_page;
-      destroy_page_until(doomed, nullptr);
+    destroy_until(nullptr);
+
+    while (current_page != nullptr) {
+      detail::ArenaPage* doomed = current_page;
       current_page = doomed->previous;
       deallocate_page(doomed);
     }
 
-    first_page = nullptr;
-    total_capacity = 0;
-    next_geometric_capacity = 0;
+    cursor = nullptr;
+    end = nullptr;
+    destructor_head = nullptr;
+    root_end = nullptr;
   }
 
-  template <std::size_t Alignment>
-  [[nodiscard]] static bool try_reserve_in_page(ArenaPage* page, const std::size_t object_size, const bool needs_node,
-                                                ReservedStorage& storage) noexcept {
+  template <std::size_t Alignment, bool NeedsNode>
+  [[nodiscard]] ReservedStorage try_carve(const std::size_t object_size) noexcept {
     static_assert(Alignment != 0);
     static_assert((Alignment & (Alignment - 1)) == 0);
 
-    const auto cursor_addr = reinterpret_cast<std::uintptr_t>(page->cursor);
-    const auto aligned_object_addr = align_up_address(cursor_addr, Alignment);
-    std::byte* object = reinterpret_cast<std::byte*>(aligned_object_addr);
-    if (object > page->end) [[unlikely]]
-      return false;
+    if (cursor == nullptr) [[unlikely]]
+      return {};
 
-    const std::size_t after_object_available = static_cast<std::size_t>(page->end - object);
-    if (object_size > after_object_available) [[unlikely]]
-      return false;
+    auto* object = reinterpret_cast<std::byte*>(align_up(reinterpret_cast<std::uintptr_t>(cursor), Alignment));
+    std::byte* next = object + static_cast<std::ptrdiff_t>(object_size);
+    if (next > end) [[unlikely]]
+      return {};
 
-    std::byte* next_cursor = object + static_cast<std::ptrdiff_t>(object_size);
-    ArenaPage::DestructorNode* node = nullptr;
-    if (needs_node)
-    {
-      const auto node_addr = align_up_address(reinterpret_cast<std::uintptr_t>(next_cursor), alignof(ArenaPage::DestructorNode));
-      std::byte* node_bytes = reinterpret_cast<std::byte*>(node_addr);
-      if (node_bytes > page->end) [[unlikely]]
-        return false;
-
-      const std::size_t after_node_available = static_cast<std::size_t>(page->end - node_bytes);
-      if (sizeof(ArenaPage::DestructorNode) > after_node_available) [[unlikely]]
-        return false;
-
-      node = reinterpret_cast<ArenaPage::DestructorNode*>(node_bytes);
-      next_cursor = node_bytes + static_cast<std::ptrdiff_t>(sizeof(ArenaPage::DestructorNode));
+    if constexpr (!NeedsNode) {
+      cursor = next;
+      return {object, nullptr};
     }
 
-    page->cursor = next_cursor;
-    storage.page = page;
-    storage.object = object;
-    storage.node = node;
-    return true;
+    auto* node = reinterpret_cast<detail::ArenaPage::DestructorNode*>(
+        align_up(reinterpret_cast<std::uintptr_t>(next), alignof(detail::ArenaPage::DestructorNode)));
+    auto* new_cursor = reinterpret_cast<std::byte*>(node) + sizeof(detail::ArenaPage::DestructorNode);
+    if (new_cursor > end) [[unlikely]]
+      return {};
+
+    cursor = new_cursor;
+    return {object, node};
   }
 
-  template <std::size_t Alignment>
-  [[nodiscard]] ReservedStorage reserve_storage(const std::size_t object_size, const bool needs_node) {
-    ReservedStorage storage{};
-    if (current_page != nullptr && try_reserve_in_page<Alignment>(current_page, object_size, needs_node, storage))
+  template <std::size_t Alignment, bool NeedsNode>
+  [[nodiscard]] ReservedStorage reserve_storage(const std::size_t object_size) {
+    if (auto storage = try_carve<Alignment, NeedsNode>(object_size); storage.object != nullptr) [[likely]]
       return storage;
 
-    const std::size_t minimum_capacity = minimum_page_capacity<Alignment>(object_size, needs_node);
-    const std::size_t new_capacity = next_geometric_capacity > minimum_capacity ? next_geometric_capacity : minimum_capacity;
+    const std::size_t minimum = minimum_page_capacity<Alignment, NeedsNode>(object_size);
+    const std::size_t cap = current_page ? static_cast<std::size_t>(end - current_page->begin()) : 0;
+    const std::size_t new_capacity = std::max(doubled_capacity(cap), minimum);
 
-    ArenaPage* new_page = allocate_page(new_capacity, current_page);
+    detail::ArenaPage* new_page = allocate_page(new_capacity, current_page);
     current_page = new_page;
-    total_capacity += new_capacity;
-    next_geometric_capacity = doubled_capacity(new_capacity);
+    cursor = new_page->begin();
+    end = cursor + static_cast<std::ptrdiff_t>(new_capacity);
 
-    const bool reserved = try_reserve_in_page<Alignment>(current_page, object_size, needs_node, storage);
-    (void)reserved;
-    return storage;
+    // New page is sized to fit — carve unconditionally
+    auto* object = reinterpret_cast<std::byte*>(align_up(reinterpret_cast<std::uintptr_t>(cursor), Alignment));
+    std::byte* next = object + static_cast<std::ptrdiff_t>(object_size);
+
+    if constexpr (!NeedsNode) {
+      cursor = next;
+      return {object, nullptr};
+    }
+
+    auto* node = reinterpret_cast<detail::ArenaPage::DestructorNode*>(
+        align_up(reinterpret_cast<std::uintptr_t>(next), alignof(detail::ArenaPage::DestructorNode)));
+    cursor = reinterpret_cast<std::byte*>(node) + sizeof(detail::ArenaPage::DestructorNode);
+    return {object, node};
   }
 
-  template <std::size_t Alignment>
-  [[nodiscard]] static std::size_t minimum_page_capacity(const std::size_t object_size, const bool needs_node) {
+  template <std::size_t Alignment, bool NeedsNode>
+  [[nodiscard]] static std::size_t minimum_page_capacity(const std::size_t object_size) {
     static_assert(Alignment != 0);
     static_assert((Alignment & (Alignment - 1)) == 0);
 
-    const std::size_t object_offset = align_up_size(0, Alignment);
-    if (object_offset > (std::numeric_limits<std::size_t>::max)() - object_size)
+    // begin() is already kAlignment-aligned; compute worst-case padding for Alignment
+    constexpr std::size_t align_pad =
+        Alignment > detail::ArenaPage::kAlignment ? Alignment - detail::ArenaPage::kAlignment : 0;
+
+    if (align_pad > (std::numeric_limits<std::size_t>::max)() - object_size)
       throw std::bad_alloc{};
 
-    std::size_t total = object_offset + object_size;
-    if (!needs_node)
+    const std::size_t total = align_pad + object_size;
+    if constexpr (!NeedsNode)
       return total;
 
-    const std::size_t node_offset = align_up_size(total, alignof(ArenaPage::DestructorNode));
-    if (node_offset > (std::numeric_limits<std::size_t>::max)() - sizeof(ArenaPage::DestructorNode))
+    const std::size_t aligned_total = static_cast<std::size_t>(
+        align_up(static_cast<std::uintptr_t>(total), alignof(detail::ArenaPage::DestructorNode)));
+    if (aligned_total > (std::numeric_limits<std::size_t>::max)() - sizeof(detail::ArenaPage::DestructorNode))
       throw std::bad_alloc{};
 
-    return node_offset + sizeof(ArenaPage::DestructorNode);
+    return aligned_total + sizeof(detail::ArenaPage::DestructorNode);
   }
 
   template <std::size_t Alignment>
   [[nodiscard]] std::byte* allocate(const std::size_t size) {
-    return reserve_storage<Alignment>(size, false).object;
+    return reserve_storage<Alignment, false>(size).object;
   }
 
   [[nodiscard]] bool is_valid_marker(const ArenaMarker marker) const noexcept {
     if (current_page == nullptr || marker.page == nullptr)
       return false;
 
-    for (ArenaPage* page = current_page; page != nullptr; page = page->previous)
-    {
+    for (const detail::ArenaPage* page = current_page; page != nullptr; page = page->previous) {
       if (page != marker.page)
         continue;
 
-      const auto begin_addr = reinterpret_cast<std::uintptr_t>(page->begin);
-      const auto marker_addr = reinterpret_cast<std::uintptr_t>(marker.cursor);
-      const auto end_addr = reinterpret_cast<std::uintptr_t>(page == current_page ? page->cursor : page->end);
-      if (marker_addr < begin_addr || marker_addr > end_addr) [[unlikely]]
-        return false;
+      const auto begin_addr = reinterpret_cast<std::uintptr_t>(page->begin());
+      const auto marker_cursor_addr = reinterpret_cast<std::uintptr_t>(marker.cursor);
 
-      return is_valid_destructor_head(page, reinterpret_cast<ArenaPage::DestructorNode*>(marker.destructor_head));
+      if (page == current_page) {
+        // The end of the current page is Arena::end; the marker's end must match
+        if (marker.end != end) [[unlikely]]
+          return false;
+        const auto current_cursor_addr = reinterpret_cast<std::uintptr_t>(cursor);
+        if (marker_cursor_addr < begin_addr || marker_cursor_addr > current_cursor_addr) [[unlikely]]
+          return false;
+      }
+      else {
+        // Finalized page: use marker.end for range validation
+        const auto marker_end_addr = reinterpret_cast<std::uintptr_t>(marker.end);
+        if (marker_end_addr < begin_addr) [[unlikely]]
+          return false;
+        if (marker_cursor_addr < begin_addr || marker_cursor_addr > marker_end_addr) [[unlikely]]
+          return false;
+      }
+
+      auto* target_head = static_cast<detail::ArenaPage::DestructorNode*>(marker.destructor_head);
+      return is_valid_destructor_head(target_head);
     }
 
     return false;
   }
 
-  [[nodiscard]] static bool is_valid_destructor_head(const ArenaPage* page, const ArenaPage::DestructorNode* target) noexcept {
+  [[nodiscard]] bool is_valid_destructor_head(const detail::ArenaPage::DestructorNode* target) const noexcept {
     if (target == nullptr)
       return true;
 
-    const auto begin_addr = reinterpret_cast<std::uintptr_t>(page->begin);
-    const auto current_addr = reinterpret_cast<std::uintptr_t>(page->cursor);
-    const auto target_addr = reinterpret_cast<std::uintptr_t>(target);
-    if (target_addr < begin_addr || target_addr >= current_addr) [[unlikely]]
-      return false;
-
-    for (const ArenaPage::DestructorNode* node = page->destructor_head; node != nullptr; node = node->previous)
-    {
+    for (const detail::ArenaPage::DestructorNode* node = destructor_head; node != nullptr; node = node->previous) {
       if (node == target)
         return true;
     }
@@ -466,19 +449,18 @@ private:
     return false;
   }
 
-  static void destroy_page_until(ArenaPage* page, ArenaPage::DestructorNode* target) noexcept {
-    while (page->destructor_head != target)
-    {
-      ArenaPage::DestructorNode* node = page->destructor_head;
+  void destroy_until(detail::ArenaPage::DestructorNode* target) noexcept {
+    while (destructor_head != target) {
+      detail::ArenaPage::DestructorNode* node = destructor_head;
       node->destroy(node->object, node->count);
-      page->destructor_head = node->previous;
+      destructor_head = node->previous;
     }
   }
 
-  static void link_node(ArenaPage* page, ArenaPage::DestructorNode* node, void* object, const std::size_t count,
-                        void (*destroy)(void*, std::size_t) noexcept) noexcept {
-    ::new (node) ArenaPage::DestructorNode{page->destructor_head, object, count, destroy};
-    page->destructor_head = node;
+  void link_node(detail::ArenaPage::DestructorNode* node, void* object, const std::size_t count,
+                 void (*destroy)(void*, std::size_t) noexcept) noexcept {
+    ::new (node) detail::ArenaPage::DestructorNode{destructor_head, object, count, destroy};
+    destructor_head = node;
   }
 
   template <typename T>
@@ -490,8 +472,7 @@ private:
 
   template <typename T>
   static void destroy_constructed_prefix(T* objects, const std::size_t count) noexcept {
-    if constexpr (!std::is_trivially_destructible_v<T>)
-    {
+    if constexpr (!std::is_trivially_destructible_v<T>) {
       for (std::size_t i = count; i > 0; --i)
         objects[i - 1].~T();
     }
@@ -500,15 +481,14 @@ private:
   template <typename T>
   friend class ArenaAllocator;
 
-  ArenaPage* first_page = nullptr;
-  ArenaPage* current_page = nullptr;
-  std::size_t total_capacity = 0;
-  std::size_t next_geometric_capacity = 0;
+  detail::ArenaPage* current_page = nullptr;
+  std::byte* cursor = nullptr;
+  std::byte* end = nullptr;
+  detail::ArenaPage::DestructorNode* destructor_head = nullptr;
+  std::byte* root_end = nullptr;
 };
 
-inline ArenaCheckpoint::~ArenaCheckpoint() noexcept {
-  rollback();
-}
+inline ArenaCheckpoint::~ArenaCheckpoint() noexcept { rollback(); }
 
 inline void ArenaCheckpoint::rollback() noexcept {
   if (!active())

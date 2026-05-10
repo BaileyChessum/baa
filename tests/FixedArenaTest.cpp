@@ -162,15 +162,14 @@ TEST(FixedArena, CheckpointDestructorRollsBackOnExceptionExit) {
   LifetimeTracker::reset();
 
   FixedArena arena(512);
-  try
-  {
+  try {
     auto checkpoint = arena.checkpoint();
     (void)arena.emplace<LifetimeTracker>(1);
     (void)arena.emplace<LifetimeTracker>(2);
     throw std::runtime_error("boom");
   }
-  catch (const std::runtime_error&)
-  {}
+  catch (const std::runtime_error&) {
+  }
 
   EXPECT_EQ(LifetimeTracker::alive, 0);
   EXPECT_EQ(LifetimeTracker::destroyed, 2);
@@ -288,15 +287,14 @@ TEST(FixedArena, CheckpointRollbackOnExceptionDestroysNewlyOwnedObjects) {
   LifetimeTracker::reset();
 
   FixedArena arena(512);
-  try
-  {
+  try {
     auto checkpoint = arena.checkpoint();
     (void)arena.emplace<LifetimeTracker>(1);
     (void)arena.emplace<LifetimeTracker>(2);
     throw std::runtime_error("boom");
   }
-  catch (const std::runtime_error&)
-  {}
+  catch (const std::runtime_error&) {
+  }
 
   EXPECT_EQ(LifetimeTracker::alive, 0);
   EXPECT_EQ(LifetimeTracker::destroyed, 2);

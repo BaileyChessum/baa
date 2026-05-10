@@ -90,8 +90,7 @@ constexpr std::size_t parserWorkingSetBytes(std::size_t depth) {
 
 template <typename ArenaT, template <typename> class AllocT>
 std::size_t parserStepRaw(ArenaT& arena, unsigned sizeClass) {
-  switch (sizeClass)
-  {
+  switch (sizeClass) {
   case 8: {
     AllocT<Node8> a(arena);
     return reinterpret_cast<std::uintptr_t>(a.allocate(1));
@@ -127,24 +126,20 @@ static void BM_ParserScratch_RawAlloc_Impl(benchmark::State& state) {
   constexpr std::size_t kDepth = 32;
   ArenaT arena(parserWorkingSetBytes(kDepth) + 4096);
 
-  for (auto _ : state)
-  {
+  for (auto _ : state) {
     benchmark::DoNotOptimize(arena.remaining());
-    for (std::size_t outer = 0; outer < kDepth; ++outer)
-    {
+    for (std::size_t outer = 0; outer < kDepth; ++outer) {
       auto mark = arena.mark();
       std::size_t checksum = outer;
       for (unsigned sizeClass : kParserPattern)
         checksum += parserStepRaw<ArenaT, AllocT>(arena, sizeClass);
       benchmark::DoNotOptimize(checksum);
       benchmark::ClobberMemory();
-      if (useUnsafeRestore)
-      {
+      if (useUnsafeRestore) {
         arena.restore_unsafe(mark);
-        benchmark::DoNotOptimize(arena.used());
+        benchmark::DoNotOptimize(arena.remaining());
       }
-      else
-      {
+      else {
         benchmark::DoNotOptimize(arena.restore(mark));
       }
     }
@@ -183,24 +178,20 @@ static void BM_ParserScratch_Emplace_Impl(benchmark::State& state) {
   constexpr std::size_t kBytesPerSlot = sizeof(T) + 40;
   ArenaT arena(kPerDepth * kBytesPerSlot + 4096);
 
-  for (auto _ : state)
-  {
+  for (auto _ : state) {
     benchmark::DoNotOptimize(arena.remaining());
-    for (std::size_t outer = 0; outer < kDepth; ++outer)
-    {
+    for (std::size_t outer = 0; outer < kDepth; ++outer) {
       auto mark = arena.mark();
       std::size_t checksum = outer;
       for (std::size_t i = 0; i < kPerDepth; ++i)
         checksum += reinterpret_cast<std::uintptr_t>(&arena.template emplace<T>());
       benchmark::DoNotOptimize(checksum);
       benchmark::ClobberMemory();
-      if (useUnsafeRestore)
-      {
+      if (useUnsafeRestore) {
         arena.restore_unsafe(mark);
-        benchmark::DoNotOptimize(arena.used());
+        benchmark::DoNotOptimize(arena.remaining());
       }
-      else
-      {
+      else {
         benchmark::DoNotOptimize(arena.restore(mark));
       }
     }
@@ -268,13 +259,11 @@ static void BM_VectorGrowth_Impl(benchmark::State& state) {
   const std::size_t bytesPerVector = sizeof(T) * elementCount;
   ArenaT arena(kVectorCount * bytesPerVector * 2 + 4096);
 
-  for (auto _ : state)
-  {
+  for (auto _ : state) {
     AllocT<T> alloc(arena);
     std::size_t checksum = 0;
 
-    for (std::size_t i = 0; i < kVectorCount; ++i)
-    {
+    for (std::size_t i = 0; i < kVectorCount; ++i) {
       std::vector<T, AllocT<T>> values(alloc);
       values.reserve(elementCount);
       fillVector(values, elementCount);
@@ -316,15 +305,13 @@ BENCHMARK_TEMPLATE(BM_VectorGrowth_FixedArena, MediumRecord)->Arg(64)->Arg(256)-
 
 static void BM_ArenaPageGrowth(benchmark::State& state) {
   constexpr std::size_t kTotalBytes = 64 * 1024; // 64 KiB of Node32 allocations per iteration
-  constexpr std::size_t kInitialPage = 256;       // tiny first page to force early growth
+  constexpr std::size_t kInitialPage = 256;      // tiny first page to force early growth
   Arena arena(kInitialPage);
 
-  for (auto _ : state)
-  {
+  for (auto _ : state) {
     std::size_t checksum = 0;
     std::size_t allocated = 0;
-    while (allocated + sizeof(Node32) <= kTotalBytes)
-    {
+    while (allocated + sizeof(Node32) <= kTotalBytes) {
       checksum += reinterpret_cast<std::uintptr_t>(&arena.emplace<Node32>());
       allocated += sizeof(Node32);
     }

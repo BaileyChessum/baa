@@ -19,14 +19,10 @@ public:
   BumpCheckpoint(const BumpCheckpoint&) = delete;
   BumpCheckpoint& operator=(const BumpCheckpoint&) = delete;
 
-  BumpCheckpoint(BumpCheckpoint&& other) noexcept
-      : bump(other.bump), mark(other.mark) {
-    other.release();
-  }
+  BumpCheckpoint(BumpCheckpoint&& other) noexcept : bump(other.bump), mark(other.mark) { other.release(); }
 
   BumpCheckpoint& operator=(BumpCheckpoint&& other) noexcept {
-    if (this != &other)
-    {
+    if (this != &other) {
       rollback();
       bump = other.bump;
       mark = other.mark;

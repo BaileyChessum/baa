@@ -7,6 +7,6 @@ ReferenceAlignment: Left
 AlwaysBreakTemplateDeclarations: Yes
 BreakBeforeBraces: Custom
 BraceWrapping:
-  AfterControlStatement: Always
+  AfterControlStatement: Never
   BeforeCatch: true
   BeforeElse: true

@@ -19,14 +19,12 @@ public:
   FixedArenaCheckpoint(const FixedArenaCheckpoint&) = delete;
   FixedArenaCheckpoint& operator=(const FixedArenaCheckpoint&) = delete;
 
-  FixedArenaCheckpoint(FixedArenaCheckpoint&& other) noexcept
-      : arena(other.arena), mark(other.mark) {
+  FixedArenaCheckpoint(FixedArenaCheckpoint&& other) noexcept : arena(other.arena), mark(other.mark) {
     other.release();
   }
 
   FixedArenaCheckpoint& operator=(FixedArenaCheckpoint&& other) noexcept {
-    if (this != &other)
-    {
+    if (this != &other) {
       rollback();
       arena = other.arena;
       mark = other.mark;

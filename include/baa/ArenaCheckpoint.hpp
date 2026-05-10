@@ -19,14 +19,10 @@ public:
   ArenaCheckpoint(const ArenaCheckpoint&) = delete;
   ArenaCheckpoint& operator=(const ArenaCheckpoint&) = delete;
 
-  ArenaCheckpoint(ArenaCheckpoint&& other) noexcept
-      : arena(other.arena), marker(other.marker) {
-    other.release();
-  }
+  ArenaCheckpoint(ArenaCheckpoint&& other) noexcept : arena(other.arena), marker(other.marker) { other.release(); }
 
   ArenaCheckpoint& operator=(ArenaCheckpoint&& other) noexcept {
-    if (this != &other)
-    {
+    if (this != &other) {
       rollback();
       arena = other.arena;
       marker = other.marker;

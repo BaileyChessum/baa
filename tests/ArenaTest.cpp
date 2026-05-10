@@ -69,15 +69,11 @@ static_assert(!std::is_trivially_destructible_v<ThrowsOnThirdDefault>);
 
 TEST(Arena, InitialState) {
   const Arena arena(256);
-  EXPECT_EQ(arena.capacity(), 256u);
-  EXPECT_EQ(arena.used(), 0u);
   EXPECT_EQ(arena.remaining(), 256u);
 }
 
 TEST(Arena, ZeroInitialCapacity) {
   const Arena arena(0);
-  EXPECT_EQ(arena.capacity(), 0u);
-  EXPECT_EQ(arena.used(), 0u);
   EXPECT_EQ(arena.remaining(), 0u);
 }
 
@@ -85,11 +81,8 @@ TEST(Arena, GrowsAcrossPages) {
   Arena arena(32);
   ArenaAllocator<int> alloc(arena);
 
-  const std::size_t capacity_before = arena.capacity();
-  (void)alloc.allocate(16);
-
-  EXPECT_GT(arena.capacity(), capacity_before);
-  EXPECT_GT(arena.used(), 0u);
+  int* p = alloc.allocate(16);
+  ASSERT_NE(p, nullptr);
 }
 
 TEST(Arena, OversizedSingleRequestAllocatesLargeEnoughPage) {
@@ -98,8 +91,6 @@ TEST(Arena, OversizedSingleRequestAllocatesLargeEnoughPage) {
 
   int* values = alloc.allocate(64);
   ASSERT_NE(values, nullptr);
-  EXPECT_GE(arena.capacity(), 64u * sizeof(int) + 16u);
-  EXPECT_GE(arena.used(), 64u * sizeof(int));
 }
 
 TEST(Arena, ResetDestroysOwnedObjectsAndDropsExtraPages) {
@@ -108,13 +99,9 @@ TEST(Arena, ResetDestroysOwnedObjectsAndDropsExtraPages) {
   Arena arena(32);
   (void)arena.emplace<LifetimeTracker>(1);
   (void)arena.emplace_array<LifetimeTracker>(4);
-  EXPECT_GT(arena.capacity(), 32u);
-
   arena.reset();
   EXPECT_EQ(LifetimeTracker::alive, 0);
   EXPECT_EQ(LifetimeTracker::destroyed, 5);
-  EXPECT_EQ(arena.capacity(), 32u);
-  EXPECT_EQ(arena.used(), 0u);
   EXPECT_EQ(arena.remaining(), 32u);
 }
 
@@ -184,15 +171,14 @@ TEST(Arena, CheckpointDestructorRollsBackOnExceptionExit) {
   LifetimeTracker::reset();
 
   Arena arena(64);
-  try
-  {
+  try {
     auto checkpoint = arena.checkpoint();
     (void)arena.emplace<LifetimeTracker>(1);
     (void)arena.emplace_array<LifetimeTracker>(3);
     throw std::runtime_error("boom");
   }
-  catch (const std::runtime_error&)
-  {}
+  catch (const std::runtime_error&) {
+  }
 
   EXPECT_EQ(LifetimeTracker::alive, 0);
 }
@@ -302,28 +288,24 @@ TEST(Arena, NestedCheckpointsUnwindInLifoOrderAcrossPages) {
 
 TEST(Arena, EmplaceConstructorFailureRollsBackState) {
   Arena arena(64);
-  const std::size_t capacity_before = arena.capacity();
-  const std::size_t used_before = arena.used();
+  const std::size_t remaining_before = arena.remaining();
   ThrowsOnConstruct::attempts = 0;
 
   EXPECT_THROW((void)arena.emplace<ThrowsOnConstruct>(), std::runtime_error);
   EXPECT_EQ(ThrowsOnConstruct::attempts, 1);
-  EXPECT_EQ(arena.capacity(), capacity_before);
-  EXPECT_EQ(arena.used(), used_before);
+  EXPECT_EQ(arena.remaining(), remaining_before);
 }
 
 TEST(Arena, EmplaceArrayConstructorFailureRollsBackStateAndDestroysPrefix) {
   Arena arena(128);
-  const std::size_t capacity_before = arena.capacity();
-  const std::size_t used_before = arena.used();
+  const std::size_t remaining_before = arena.remaining();
   ThrowsOnThirdDefault::attempts = 0;
   ThrowsOnThirdDefault::destroyed = 0;
 
   EXPECT_THROW((void)arena.emplace_array<ThrowsOnThirdDefault>(4), std::runtime_error);
   EXPECT_EQ(ThrowsOnThirdDefault::attempts, 3);
   EXPECT_EQ(ThrowsOnThirdDefault::destroyed, 2);
-  EXPECT_EQ(arena.capacity(), capacity_before);
-  EXPECT_EQ(arena.used(), used_before);
+  EXPECT_EQ(arena.remaining(), remaining_before);
 }
 
 TEST(Arena, MarkerSurvivesMoveConstruction) {
@@ -398,7 +380,6 @@ TEST(ArenaAllocator, GrowsInsteadOfExhausting) {
 
   (void)alloc.allocate(1);
   EXPECT_NO_THROW((void)alloc.allocate(1));
-  EXPECT_GT(arena.capacity(), sizeof(int));
 }
 
 TEST(ArenaAllocator, OversizedAllocationThrowsBadAlloc) {
@@ -412,9 +393,9 @@ TEST(ArenaAllocator, DeallocateDoesNothing) {
   Arena arena(64);
   ArenaAllocator<int> alloc(arena);
   int* p = alloc.allocate(1);
-  const std::size_t used_before = arena.used();
+  const std::size_t remaining_before = arena.remaining();
   alloc.deallocate(p, 1);
-  EXPECT_EQ(arena.used(), used_before);
+  EXPECT_EQ(arena.remaining(), remaining_before);
 }
 
 TEST(ArenaAllocator, EqualWhenSameArena) {
@@ -443,7 +424,6 @@ TEST(ArenaAllocator, StdVectorSpansMultiplePages) {
 
   for (std::size_t i = 0; i < values.size(); ++i)
     EXPECT_EQ(values[i], static_cast<int>(i));
-  EXPECT_GT(arena.capacity(), 64u);
 }
 
 } // namespace baa

@@ -42,8 +42,7 @@ public:
   }
 
   Bump& operator=(Bump&& other) noexcept {
-    if (this != &other)
-    {
+    if (this != &other) {
       buffer = std::move(other.buffer);
       cursor = other.cursor;
       end = other.end;
@@ -71,10 +70,10 @@ public:
     if (!raw) [[unlikely]]
       throw std::bad_alloc{};
 
-    try
-    { return *::new (raw) T(std::forward<Args>(args)...); }
-    catch (...)
-    {
+    try {
+      return *::new (raw) T(std::forward<Args>(args)...);
+    }
+    catch (...) {
       restore_unsafe(saved);
       throw;
     }
@@ -105,13 +104,11 @@ public:
       throw std::bad_alloc{};
 
     T* ptr = reinterpret_cast<T*>(raw);
-    try
-    {
+    try {
       for (std::size_t i = 0; i < count; ++i)
         ::new (ptr + i) T();
     }
-    catch (...)
-    {
+    catch (...) {
       restore_unsafe(saved);
       throw;
     }
@@ -134,9 +131,7 @@ public:
    * `rollback()` restores to the saved point immediately. `release()` keeps the current
    * allocations and disables rollback.
    */
-  [[nodiscard]] BumpCheckpoint checkpoint() noexcept {
-    return BumpCheckpoint(this, mark());
-  }
+  [[nodiscard]] BumpCheckpoint checkpoint() noexcept { return BumpCheckpoint(this, mark()); }
 
   /**
    * @brief Restore the cursor to a previously saved mark.
@@ -223,9 +218,7 @@ private:
   std::byte* end;
 };
 
-inline BumpCheckpoint::~BumpCheckpoint() noexcept {
-  rollback();
-}
+inline BumpCheckpoint::~BumpCheckpoint() noexcept { rollback(); }
 
 inline void BumpCheckpoint::rollback() noexcept {
   if (!active())

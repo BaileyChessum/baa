@@ -81,8 +81,7 @@ void fillVector(std::vector<int, BumpAllocator<int>>& values, std::size_t count)
 
 template <>
 void fillVector(std::vector<SmallRecord, BumpAllocator<SmallRecord>>& values, std::size_t count) {
-  for (std::size_t i = 0; i < count; ++i)
-  {
+  for (std::size_t i = 0; i < count; ++i) {
     values.push_back(SmallRecord{static_cast<std::uint32_t>(i), static_cast<std::uint32_t>(i ^ 0x55u), i});
   }
 }
@@ -94,8 +93,7 @@ void fillVector(std::vector<MediumRecord, BumpAllocator<MediumRecord>>& values, 
 }
 
 std::size_t parserStep(Bump& bump, unsigned sizeClass) {
-  switch (sizeClass)
-  {
+  switch (sizeClass) {
   case 8: {
     BumpAllocator<Node8> alloc(bump);
     return reinterpret_cast<std::uintptr_t>(alloc.allocate(1));
@@ -130,26 +128,21 @@ static void BM_ParserStyleScratch(benchmark::State& state) {
   constexpr std::size_t kDepth = 32;
   Bump bump(parserWorkingSetBytes(kDepth) + 4096);
 
-  for (auto _ : state)
-  {
+  for (auto _ : state) {
     benchmark::DoNotOptimize(bump.remaining());
-    for (std::size_t outer = 0; outer < kDepth; ++outer)
-    {
+    for (std::size_t outer = 0; outer < kDepth; ++outer) {
       BumpMarker mark = bump.mark();
       std::size_t checksum = outer;
-      for (unsigned sizeClass : kParserPattern)
-      {
+      for (unsigned sizeClass : kParserPattern) {
         checksum += parserStep(bump, sizeClass);
       }
       benchmark::DoNotOptimize(checksum);
       benchmark::ClobberMemory();
-      if (useUnsafeRestore)
-      {
+      if (useUnsafeRestore) {
         bump.restore_unsafe(mark);
         benchmark::DoNotOptimize(bump.used());
       }
-      else
-      {
+      else {
         benchmark::DoNotOptimize(bump.restore(mark));
       }
     }
@@ -169,13 +162,11 @@ static void BM_VectorGrowth(benchmark::State& state) {
   const std::size_t bytesPerVector = sizeof(T) * elementCount;
   Bump bump(kVectorCount * bytesPerVector * 2 + 4096);
 
-  for (auto _ : state)
-  {
+  for (auto _ : state) {
     BumpAllocator<T> alloc(bump);
     std::size_t checksum = 0;
 
-    for (std::size_t i = 0; i < kVectorCount; ++i)
-    {
+    for (std::size_t i = 0; i < kVectorCount; ++i) {
       std::vector<T, BumpAllocator<T>> values(alloc);
       values.reserve(elementCount);
       fillVector(values, elementCount);

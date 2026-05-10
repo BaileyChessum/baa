@@ -47,8 +47,7 @@ public:
   }
 
   FixedArena& operator=(FixedArena&& other) noexcept {
-    if (this != &other)
-    {
+    if (this != &other) {
       reset();
 
       buffer = std::move(other.buffer);
@@ -83,25 +82,21 @@ public:
       throw std::bad_alloc{};
 
     DestructorNode* node = nullptr;
-    if constexpr (!std::is_trivially_destructible_v<T>)
-    {
+    if constexpr (!std::is_trivially_destructible_v<T>) {
       node = allocate_node();
-      if (!node) [[unlikely]]
-      {
+      if (!node) [[unlikely]] {
         restore_cursor_only(saved);
         throw std::bad_alloc{};
       }
     }
 
-    try
-    {
+    try {
       T* object = ::new (raw) T(std::forward<Args>(args)...);
       if constexpr (!std::is_trivially_destructible_v<T>)
         link_node(node, object, 1, &destroy_range<T>);
       return *object;
     }
-    catch (...)
-    {
+    catch (...) {
       restore_cursor_only(saved);
       throw;
     }
@@ -132,11 +127,9 @@ public:
       throw std::bad_alloc{};
 
     DestructorNode* node = nullptr;
-    if constexpr (!std::is_trivially_destructible_v<T>)
-    {
+    if constexpr (!std::is_trivially_destructible_v<T>) {
       node = allocate_node();
-      if (!node) [[unlikely]]
-      {
+      if (!node) [[unlikely]] {
         restore_cursor_only(saved);
         throw std::bad_alloc{};
       }
@@ -144,13 +137,11 @@ public:
 
     T* objects = reinterpret_cast<T*>(raw);
     std::size_t constructed = 0;
-    try
-    {
+    try {
       for (; constructed < count; ++constructed)
         ::new (objects + constructed) T();
     }
-    catch (...)
-    {
+    catch (...) {
       destroy_constructed_prefix(objects, constructed);
       restore_cursor_only(saved);
       throw;
@@ -168,7 +159,9 @@ public:
    * scope-bounded temporary allocation that should roll back automatically unless released.
    * @return A mark that can later be passed to `restore()` or `restore_unsafe()`.
    */
-  [[nodiscard]] FixedArenaMarker mark() const noexcept { return {cursor, reinterpret_cast<std::byte*>(destructor_head)}; }
+  [[nodiscard]] FixedArenaMarker mark() const noexcept {
+    return {cursor, reinterpret_cast<std::byte*>(destructor_head)};
+  }
 
   /**
    * @brief Create a scope guard that restores this arena unless released.
@@ -177,9 +170,7 @@ public:
    * `rollback()` restores to the saved point immediately and may destroy owned non-trivial
    * objects created since the checkpoint was taken. `release()` keeps current allocations.
    */
-  [[nodiscard]] FixedArenaCheckpoint checkpoint() noexcept {
-    return FixedArenaCheckpoint(this, mark());
-  }
+  [[nodiscard]] FixedArenaCheckpoint checkpoint() noexcept { return FixedArenaCheckpoint(this, mark()); }
 
   /**
    * @brief Restore the arena to a previously saved mark.
@@ -288,8 +279,7 @@ private:
         target_addr < begin_addr || target_addr >= current_addr) [[unlikely]]
       return false;
 
-    for (const DestructorNode* node = destructor_head; node != nullptr; node = node->previous)
-    {
+    for (const DestructorNode* node = destructor_head; node != nullptr; node = node->previous) {
       if (node == target)
         return true;
     }
@@ -298,8 +288,7 @@ private:
   }
 
   void destroy_tracked_until(DestructorNode* target) noexcept {
-    while (destructor_head != target)
-    {
+    while (destructor_head != target) {
       DestructorNode* node = destructor_head;
       node->destroy(node->object, node->count);
       destructor_head = node->previous;
@@ -321,8 +310,7 @@ private:
 
   template <typename T>
   static void destroy_constructed_prefix(T* objects, const std::size_t count) noexcept {
-    if constexpr (!std::is_trivially_destructible_v<T>)
-    {
+    if constexpr (!std::is_trivially_destructible_v<T>) {
       for (std::size_t i = count; i > 0; --i)
         objects[i - 1].~T();
     }
@@ -337,9 +325,7 @@ private:
   DestructorNode* destructor_head = nullptr;
 };
 
-inline FixedArenaCheckpoint::~FixedArenaCheckpoint() noexcept {
-  rollback();
-}
+inline FixedArenaCheckpoint::~FixedArenaCheckpoint() noexcept { rollback(); }
 
 inline void FixedArenaCheckpoint::rollback() noexcept {
   if (!active())

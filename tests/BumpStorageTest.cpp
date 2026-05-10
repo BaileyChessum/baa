@@ -122,14 +122,13 @@ TEST(Bump, CheckpointDestructorRollsBackOnExceptionExit) {
   Bump s(256);
   BumpAllocator<int> alloc(s);
 
-  try
-  {
+  try {
     auto checkpoint = s.checkpoint();
     (void)alloc.allocate(4);
     throw std::runtime_error("boom");
   }
-  catch (const std::runtime_error&)
-  {}
+  catch (const std::runtime_error&) {
+  }
 
   EXPECT_EQ(s.used(), 0u);
 }
