@@ -5,6 +5,7 @@
 
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 // Note: Bump::allocate is private — allocation behaviour is tested via BumpAllocator<T>.
 // These tests cover construction, capacity accounting, mark/restore, reset, and move semantics.
@@ -101,6 +102,132 @@ TEST(Bump, RejectsForeignMarks) {
   BumpMark m = a.mark();
   EXPECT_FALSE(b.restore(m));
   EXPECT_EQ(b.used() + b.remaining(), b.capacity());
+}
+
+TEST(Bump, CheckpointDestructorRollsBackOnScopeExit) {
+  Bump s(256);
+  BumpAllocator<int> alloc(s);
+
+  {
+    auto checkpoint = s.checkpoint();
+    (void)alloc.allocate(4);
+    EXPECT_TRUE(checkpoint.active());
+    EXPECT_GT(s.used(), 0u);
+  }
+
+  EXPECT_EQ(s.used(), 0u);
+}
+
+TEST(Bump, CheckpointDestructorRollsBackOnExceptionExit) {
+  Bump s(256);
+  BumpAllocator<int> alloc(s);
+
+  try
+  {
+    auto checkpoint = s.checkpoint();
+    (void)alloc.allocate(4);
+    throw std::runtime_error("boom");
+  }
+  catch (const std::runtime_error&)
+  {}
+
+  EXPECT_EQ(s.used(), 0u);
+}
+
+TEST(Bump, CheckpointReleaseKeepsAllocations) {
+  Bump s(256);
+  BumpAllocator<int> alloc(s);
+
+  {
+    auto checkpoint = s.checkpoint();
+    (void)alloc.allocate(4);
+    checkpoint.release();
+    EXPECT_FALSE(checkpoint.active());
+  }
+
+  EXPECT_EQ(s.used(), 4u * sizeof(int));
+}
+
+TEST(Bump, CheckpointRollbackRestoresImmediately) {
+  Bump s(256);
+  BumpAllocator<int> alloc(s);
+
+  auto checkpoint = s.checkpoint();
+  (void)alloc.allocate(4);
+  EXPECT_GT(s.used(), 0u);
+
+  checkpoint.rollback();
+  EXPECT_FALSE(checkpoint.active());
+  EXPECT_EQ(s.used(), 0u);
+}
+
+TEST(Bump, CheckpointReleaseIsIdempotent) {
+  Bump s(256);
+  BumpAllocator<int> alloc(s);
+
+  auto checkpoint = s.checkpoint();
+  (void)alloc.allocate(4);
+  checkpoint.release();
+  checkpoint.release();
+
+  EXPECT_FALSE(checkpoint.active());
+  EXPECT_EQ(s.used(), 4u * sizeof(int));
+}
+
+TEST(Bump, CheckpointRollbackIsIdempotent) {
+  Bump s(256);
+  BumpAllocator<int> alloc(s);
+
+  auto checkpoint = s.checkpoint();
+  (void)alloc.allocate(4);
+  checkpoint.rollback();
+  checkpoint.rollback();
+
+  EXPECT_FALSE(checkpoint.active());
+  EXPECT_EQ(s.used(), 0u);
+}
+
+TEST(Bump, CheckpointMoveTransfersResponsibility) {
+  Bump s(256);
+  BumpAllocator<int> alloc(s);
+
+  {
+    auto original = s.checkpoint();
+    (void)alloc.allocate(4);
+    auto moved = std::move(original);
+    EXPECT_FALSE(original.active());
+    EXPECT_TRUE(moved.active());
+  }
+
+  EXPECT_EQ(s.used(), 0u);
+}
+
+TEST(Bump, MovedFromCheckpointIsInactive) {
+  Bump s(256);
+  auto original = s.checkpoint();
+  auto moved = std::move(original);
+
+  EXPECT_FALSE(original.active());
+  EXPECT_TRUE(moved.active());
+}
+
+TEST(Bump, NestedCheckpointsUnwindInLifoOrder) {
+  Bump s(256);
+  BumpAllocator<int> alloc(s);
+
+  auto outer = s.checkpoint();
+  (void)alloc.allocate(2);
+  const std::size_t after_outer = s.used();
+
+  {
+    auto inner = s.checkpoint();
+    (void)alloc.allocate(3);
+    EXPECT_GT(s.used(), after_outer);
+  }
+
+  EXPECT_EQ(s.used(), after_outer);
+  outer.rollback();
+  EXPECT_EQ(s.used(), 0u);
 }
 
 // --- Move semantics ---------------------------------------------------------

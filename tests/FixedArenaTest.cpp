@@ -8,6 +8,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace baa {
@@ -138,6 +139,169 @@ TEST(FixedArena, RejectsForeignMarks) {
   EXPECT_FALSE(b.restore(mark));
   EXPECT_EQ(b.used(), 0u);
   EXPECT_EQ(b.used() + b.remaining(), b.capacity());
+}
+
+TEST(FixedArena, CheckpointDestructorRollsBackOnScopeExit) {
+  LifetimeTracker::reset();
+
+  FixedArena arena(512);
+  {
+    auto checkpoint = arena.checkpoint();
+    (void)arena.emplace<LifetimeTracker>(1);
+    (void)arena.emplace<LifetimeTracker>(2);
+    EXPECT_EQ(LifetimeTracker::alive, 2);
+  }
+
+  EXPECT_EQ(LifetimeTracker::alive, 0);
+  EXPECT_EQ(LifetimeTracker::destroyed, 2);
+  EXPECT_EQ(LifetimeTracker::order[0], 2);
+  EXPECT_EQ(LifetimeTracker::order[1], 1);
+}
+
+TEST(FixedArena, CheckpointDestructorRollsBackOnExceptionExit) {
+  LifetimeTracker::reset();
+
+  FixedArena arena(512);
+  try
+  {
+    auto checkpoint = arena.checkpoint();
+    (void)arena.emplace<LifetimeTracker>(1);
+    (void)arena.emplace<LifetimeTracker>(2);
+    throw std::runtime_error("boom");
+  }
+  catch (const std::runtime_error&)
+  {}
+
+  EXPECT_EQ(LifetimeTracker::alive, 0);
+  EXPECT_EQ(LifetimeTracker::destroyed, 2);
+}
+
+TEST(FixedArena, CheckpointReleaseKeepsAllocationsAndOwnedObjects) {
+  LifetimeTracker::reset();
+
+  FixedArena arena(512);
+  {
+    auto checkpoint = arena.checkpoint();
+    (void)arena.emplace<LifetimeTracker>(1);
+    (void)arena.emplace<LifetimeTracker>(2);
+    checkpoint.release();
+    EXPECT_FALSE(checkpoint.active());
+  }
+
+  EXPECT_EQ(LifetimeTracker::alive, 2);
+  EXPECT_EQ(LifetimeTracker::destroyed, 0);
+  arena.reset();
+}
+
+TEST(FixedArena, CheckpointRollbackRestoresImmediatelyAndDestroysOwnedObjects) {
+  LifetimeTracker::reset();
+
+  FixedArena arena(512);
+  auto checkpoint = arena.checkpoint();
+  (void)arena.emplace<LifetimeTracker>(1);
+  (void)arena.emplace<LifetimeTracker>(2);
+
+  checkpoint.rollback();
+  EXPECT_FALSE(checkpoint.active());
+  EXPECT_EQ(LifetimeTracker::alive, 0);
+  EXPECT_EQ(LifetimeTracker::destroyed, 2);
+}
+
+TEST(FixedArena, CheckpointReleaseIsIdempotent) {
+  LifetimeTracker::reset();
+
+  FixedArena arena(512);
+  auto checkpoint = arena.checkpoint();
+  (void)arena.emplace<LifetimeTracker>(1);
+  checkpoint.release();
+  checkpoint.release();
+
+  EXPECT_FALSE(checkpoint.active());
+  EXPECT_EQ(LifetimeTracker::alive, 1);
+  arena.reset();
+}
+
+TEST(FixedArena, CheckpointRollbackIsIdempotent) {
+  LifetimeTracker::reset();
+
+  FixedArena arena(512);
+  auto checkpoint = arena.checkpoint();
+  (void)arena.emplace<LifetimeTracker>(1);
+  checkpoint.rollback();
+  checkpoint.rollback();
+
+  EXPECT_FALSE(checkpoint.active());
+  EXPECT_EQ(LifetimeTracker::alive, 0);
+  EXPECT_EQ(LifetimeTracker::destroyed, 1);
+}
+
+TEST(FixedArena, CheckpointMoveTransfersResponsibility) {
+  LifetimeTracker::reset();
+
+  FixedArena arena(512);
+  {
+    auto original = arena.checkpoint();
+    (void)arena.emplace<LifetimeTracker>(1);
+    auto moved = std::move(original);
+    EXPECT_FALSE(original.active());
+    EXPECT_TRUE(moved.active());
+  }
+
+  EXPECT_EQ(LifetimeTracker::alive, 0);
+  EXPECT_EQ(LifetimeTracker::destroyed, 1);
+}
+
+TEST(FixedArena, MovedFromCheckpointIsInactive) {
+  FixedArena arena(512);
+  auto original = arena.checkpoint();
+  auto moved = std::move(original);
+
+  EXPECT_FALSE(original.active());
+  EXPECT_TRUE(moved.active());
+}
+
+TEST(FixedArena, NestedCheckpointsUnwindInLifoOrder) {
+  LifetimeTracker::reset();
+
+  FixedArena arena(512);
+  auto outer = arena.checkpoint();
+  (void)arena.emplace<LifetimeTracker>(1);
+
+  {
+    auto inner = arena.checkpoint();
+    (void)arena.emplace<LifetimeTracker>(2);
+    (void)arena.emplace<LifetimeTracker>(3);
+  }
+
+  EXPECT_EQ(LifetimeTracker::alive, 1);
+  EXPECT_EQ(LifetimeTracker::destroyed, 2);
+  EXPECT_EQ(LifetimeTracker::order[0], 3);
+  EXPECT_EQ(LifetimeTracker::order[1], 2);
+
+  outer.rollback();
+  EXPECT_EQ(LifetimeTracker::alive, 0);
+  EXPECT_EQ(LifetimeTracker::destroyed, 3);
+  EXPECT_EQ(LifetimeTracker::order[2], 1);
+}
+
+TEST(FixedArena, CheckpointRollbackOnExceptionDestroysNewlyOwnedObjects) {
+  LifetimeTracker::reset();
+
+  FixedArena arena(512);
+  try
+  {
+    auto checkpoint = arena.checkpoint();
+    (void)arena.emplace<LifetimeTracker>(1);
+    (void)arena.emplace<LifetimeTracker>(2);
+    throw std::runtime_error("boom");
+  }
+  catch (const std::runtime_error&)
+  {}
+
+  EXPECT_EQ(LifetimeTracker::alive, 0);
+  EXPECT_EQ(LifetimeTracker::destroyed, 2);
+  EXPECT_EQ(LifetimeTracker::order[0], 2);
+  EXPECT_EQ(LifetimeTracker::order[1], 1);
 }
 
 TEST(FixedArena, TrivialArraysDoNotNeedDestructorTracking) {

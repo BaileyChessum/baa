@@ -17,8 +17,8 @@ namespace baa {
  * does not track or invoke destructors.
  *
  * @warning This is a non-owning handle. The referenced `Bump` must outlive it.
- * @note `deallocate()` is a no-op; memory is reclaimed only via `Bump::reset()`
- * or `Bump::restore()`.
+ * @note `deallocate()` is a no-op; memory is reclaimed only via `Bump::reset()`,
+ * `Bump::restore()`, or `BumpCheckpoint::rollback()`.
  */
 template <typename T>
   requires std::is_trivially_destructible_v<T>
@@ -51,7 +51,8 @@ public:
 
   /**
    * @brief No-op deallocation hook for allocator-aware code.
-   * @warning Memory is reclaimed only in bulk via `Bump::reset()` or `Bump::restore()`.
+   * @warning Memory is reclaimed only in bulk via `Bump::reset()`, `Bump::restore()`,
+   * or `BumpCheckpoint::rollback()`.
    */
   void deallocate(T*, std::size_t) noexcept {}
 

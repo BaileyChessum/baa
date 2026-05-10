@@ -1,5 +1,6 @@
 #pragma once
 
+#include <baa/BumpCheckpoint.hpp>
 #include <baa/BumpMark.hpp>
 
 #include <concepts>
@@ -120,14 +121,29 @@ public:
 
   /**
    * @brief Save the current cursor position.
+   * @note This is the low-level explicit checkpoint primitive. Prefer `checkpoint()` for
+   * scope-bounded temporary allocation that should roll back automatically unless released.
    * @return A mark that can later be passed to `restore()` or `restore_unsafe()`.
    */
   [[nodiscard]] BumpMark mark() const noexcept { return {cursor}; }
 
   /**
+   * @brief Create a scope guard that restores this arena unless released.
+   * @return Active checkpoint guard capturing the current cursor position.
+   *
+   * `rollback()` restores to the saved point immediately. `release()` keeps the current
+   * allocations and disables rollback.
+   */
+  [[nodiscard]] BumpCheckpoint checkpoint() noexcept {
+    return BumpCheckpoint(this, mark(), [](Bump* bump, const BumpMark saved) noexcept { bump->restore_unsafe(saved); });
+  }
+
+  /**
    * @brief Restore the cursor to a previously saved mark.
    * @param m Mark to restore.
    * @return `true` when the mark is accepted; `false` when it lies outside this arena's buffer.
+   * @note This is the low-level explicit checkpoint primitive. Prefer `checkpoint()` unless you
+   * need manual mark management.
    */
   [[nodiscard]] bool restore(const BumpMark m) noexcept {
     // Compare integer addresses directly so the header does not need <functional> for std::less<>.
@@ -146,12 +162,15 @@ public:
    * @brief Restore the cursor to a previously saved mark without validation.
    * @param m Mark to restore.
    * @warning The caller must ensure that `m` came from this arena's backing buffer.
+   * @note This is intended for internal or otherwise guaranteed-valid marks such as those held by
+   * `BumpCheckpoint`.
    */
   void restore_unsafe(const BumpMark m) noexcept { cursor = m.cursor; }
 
   /**
    * @brief Reset the cursor to the beginning of the buffer.
-   * @warning Invalidates all outstanding pointers and references into the arena.
+   * @warning Invalidates all outstanding pointers and references into the arena, including
+   * storage kept alive through `BumpAllocator<T>`.
    */
   void reset() noexcept { cursor = buffer.get(); }
 

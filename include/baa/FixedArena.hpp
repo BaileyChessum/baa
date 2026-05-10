@@ -1,5 +1,6 @@
 #pragma once
 
+#include <baa/FixedArenaCheckpoint.hpp>
 #include <baa/FixedArenaMark.hpp>
 
 #include <concepts>
@@ -163,9 +164,23 @@ public:
 
   /**
    * @brief Save the current cursor and owned-destructor state.
+   * @note This is the low-level explicit checkpoint primitive. Prefer `checkpoint()` for
+   * scope-bounded temporary allocation that should roll back automatically unless released.
    * @return A mark that can later be passed to `restore()` or `restore_unsafe()`.
    */
   [[nodiscard]] FixedArenaMark mark() const noexcept { return {cursor, reinterpret_cast<std::byte*>(destructor_head)}; }
+
+  /**
+   * @brief Create a scope guard that restores this arena unless released.
+   * @return Active checkpoint guard capturing the current cursor and destructor state.
+   *
+   * `rollback()` restores to the saved point immediately and may destroy owned non-trivial
+   * objects created since the checkpoint was taken. `release()` keeps current allocations.
+   */
+  [[nodiscard]] FixedArenaCheckpoint checkpoint() noexcept {
+    return FixedArenaCheckpoint(this, mark(),
+                                [](FixedArena* arena, const FixedArenaMark saved) noexcept { arena->restore_unsafe(saved); });
+  }
 
   /**
    * @brief Restore the arena to a previously saved mark.
@@ -174,6 +189,9 @@ public:
    *
    * Accepted marks must point into this arena's current buffer, must not advance the cursor,
    * and must refer to the current destruction stack or one of its ancestors.
+   *
+   * This is the low-level explicit checkpoint primitive. Prefer `checkpoint()` unless you need
+   * manual mark management.
    */
   [[nodiscard]] bool restore(const FixedArenaMark m) noexcept {
     if (!is_valid_mark(m)) [[unlikely]]
@@ -187,6 +205,8 @@ public:
    * @brief Restore the arena to a previously saved mark without validation.
    * @param m Mark to restore.
    * @warning The caller must ensure that `m` is an ancestor mark for this arena's current state.
+   * @note This is intended for internal or otherwise guaranteed-valid marks such as those held by
+   * `FixedArenaCheckpoint`.
    */
   void restore_unsafe(const FixedArenaMark m) noexcept {
     destroy_tracked_until(reinterpret_cast<DestructorNode*>(m.destructor_head));
@@ -196,7 +216,8 @@ public:
 
   /**
    * @brief Reset the arena to the beginning of its buffer.
-   * @warning Destroys all arena-owned non-trivial objects and invalidates outstanding storage.
+   * @warning Destroys all arena-owned non-trivial objects and invalidates outstanding storage,
+   * including storage kept alive through `FixedArenaAllocator<T>`.
    */
   void reset() noexcept {
     destroy_tracked_until(nullptr);

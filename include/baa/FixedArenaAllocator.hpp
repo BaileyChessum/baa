@@ -18,8 +18,8 @@ namespace baa {
  * @tparam T Allocated element type.
  *
  * @warning This is a non-owning handle. The referenced `FixedArena` must outlive it.
- * @warning `FixedArena::reset()` and `restore()` invalidate storage without calling
- * destructors for allocator-managed objects.
+ * @warning `FixedArena::reset()`, `restore()`, and `FixedArenaCheckpoint::rollback()`
+ * invalidate storage without calling destructors for allocator-managed objects.
  */
 template <typename T>
 class FixedArenaAllocator {
@@ -50,7 +50,8 @@ public:
 
   /**
    * @brief No-op deallocation hook for allocator-aware code.
-   * @warning Memory is reclaimed only via `FixedArena::reset()` or `FixedArena::restore()`.
+   * @warning Memory is reclaimed only via `FixedArena::reset()`, `FixedArena::restore()`,
+   * or `FixedArenaCheckpoint::rollback()`.
    */
   void deallocate(T*, std::size_t) noexcept {}
 
