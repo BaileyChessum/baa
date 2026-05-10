@@ -32,12 +32,15 @@
         packages = [
           llvm.clang
           llvm.clang-tools
+          llvm.llvm
           pkgs.cmake
           pkgs.ninja
           pkgs.pkg-config
           pkgs.gtest
           pkgs.gbenchmark
           pkgs.doxygen
+          pkgs.linuxPackages.perf
+          pkgs.hotspot
         ];
 
         shellHook = ''

@@ -196,17 +196,14 @@ private:
     if (cursor == nullptr) [[unlikely]]
       return nullptr;
 
-    const auto addr = reinterpret_cast<std::uintptr_t>(cursor);
-    const auto misalignment = addr & (Alignment - 1);
-    const auto padding = misalignment == 0 ? 0 : Alignment - misalignment;
-
-    if (const auto available = static_cast<std::size_t>(end - cursor);
-        padding > available || size > available - padding) [[unlikely]]
+    auto* object = reinterpret_cast<std::byte*>(
+        (reinterpret_cast<std::uintptr_t>(cursor) + (Alignment - 1)) & ~std::uintptr_t{Alignment - 1});
+    std::byte* next = object + size;
+    if (next > end) [[unlikely]]
       return nullptr;
 
-    const auto aligned = cursor + static_cast<std::ptrdiff_t>(padding);
-    cursor = aligned + size;
-    return aligned;
+    cursor = next;
+    return object;
   }
 
   template <typename T>

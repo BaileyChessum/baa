@@ -12,7 +12,6 @@ struct ArenaPage;
 struct ArenaMarker {
   detail::ArenaPage* page = nullptr;
   std::byte* cursor = nullptr;
-  std::byte* end = nullptr;
   void* destructor_head = nullptr;
 };
 

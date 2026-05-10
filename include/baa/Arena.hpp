@@ -33,6 +33,7 @@ struct ArenaPage {
   [[nodiscard]] std::byte* begin() const noexcept;
 
   ArenaPage* previous = nullptr;
+  std::byte* end = nullptr;
 };
 
 inline std::byte* ArenaPage::begin() const noexcept {
@@ -59,7 +60,7 @@ public:
   explicit Arena(const std::size_t initial_capacity) {
     current_page = allocate_page(initial_capacity, nullptr);
     cursor = current_page->begin();
-    root_end = end = cursor + static_cast<std::ptrdiff_t>(initial_capacity);
+    end = current_page->end;
   }
 
   ~Arena() { release_all_pages(); }
@@ -68,13 +69,11 @@ public:
   Arena& operator=(const Arena&) = delete;
 
   Arena(Arena&& other) noexcept
-      : current_page(other.current_page), cursor(other.cursor), end(other.end), destructor_head(other.destructor_head),
-        root_end(other.root_end) {
+      : current_page(other.current_page), cursor(other.cursor), end(other.end), destructor_head(other.destructor_head) {
     other.current_page = nullptr;
     other.cursor = nullptr;
     other.end = nullptr;
     other.destructor_head = nullptr;
-    other.root_end = nullptr;
   }
 
   Arena& operator=(Arena&& other) noexcept {
@@ -85,13 +84,11 @@ public:
       cursor = other.cursor;
       end = other.end;
       destructor_head = other.destructor_head;
-      root_end = other.root_end;
 
       other.current_page = nullptr;
       other.cursor = nullptr;
       other.end = nullptr;
       other.destructor_head = nullptr;
-      other.root_end = nullptr;
     }
     return *this;
   }
@@ -110,13 +107,16 @@ public:
   template <typename T, typename... Args>
     requires std::constructible_from<T, Args...>
   [[nodiscard]] T& emplace(Args&&... args) {
+    constexpr bool kNeedsNode = !std::is_trivially_destructible_v<T>;
     const ArenaMarker saved = mark();
 
-    ReservedStorage storage = reserve_storage<alignof(T), !std::is_trivially_destructible_v<T>>(sizeof(T));
+    ReservedStorage storage = try_carve<alignof(T), kNeedsNode>(sizeof(T));
+    if (!storage.object) [[unlikely]]
+      storage = grow_and_carve<alignof(T), kNeedsNode>(sizeof(T));
 
     try {
       T* object = ::new (storage.object) T(std::forward<Args>(args)...);
-      if constexpr (!std::is_trivially_destructible_v<T>)
+      if constexpr (kNeedsNode)
         link_node(storage.node, object, 1, &destroy_range<T>);
       return *object;
     }
@@ -145,10 +145,15 @@ public:
     if (count > static_cast<std::size_t>(-1) / sizeof(T)) [[unlikely]]
       throw std::bad_alloc{};
 
+    constexpr bool kNeedsNode = !std::is_trivially_destructible_v<T>;
+    const std::size_t bytes = sizeof(T) * count;
     const ArenaMarker saved = mark();
-    ReservedStorage storage = reserve_storage<alignof(T), !std::is_trivially_destructible_v<T>>(sizeof(T) * count);
-    T* objects = reinterpret_cast<T*>(storage.object);
 
+    ReservedStorage storage = try_carve<alignof(T), kNeedsNode>(bytes);
+    if (!storage.object) [[unlikely]]
+      storage = grow_and_carve<alignof(T), kNeedsNode>(bytes);
+
+    T* objects = reinterpret_cast<T*>(storage.object);
     std::size_t constructed = 0;
     try {
       for (; constructed < count; ++constructed)
@@ -160,7 +165,7 @@ public:
       throw;
     }
 
-    if constexpr (!std::is_trivially_destructible_v<T>)
+    if constexpr (kNeedsNode)
       link_node(storage.node, objects, count, &destroy_range<T>);
 
     return std::span<T>(objects, count);
@@ -173,10 +178,7 @@ public:
    * @return A marker that can later be passed to `restore()` or `restore_unsafe()`.
    */
   [[nodiscard]] ArenaMarker mark() const noexcept {
-    if (current_page == nullptr)
-      return {};
-
-    return {current_page, cursor, end, static_cast<void*>(destructor_head)};
+    return {current_page, cursor, static_cast<void*>(destructor_head)};
   }
 
   /**
@@ -222,14 +224,16 @@ public:
     auto* target_head = static_cast<detail::ArenaPage::DestructorNode*>(marker.destructor_head);
     destroy_until(target_head);
 
-    while (current_page != marker.page) {
-      detail::ArenaPage* doomed = current_page;
-      current_page = doomed->previous;
-      deallocate_page(doomed);
+    if (current_page != marker.page) {
+      do {
+        detail::ArenaPage* doomed = current_page;
+        current_page = doomed->previous;
+        deallocate_page(doomed);
+      } while (current_page != marker.page);
+      end = current_page->end;
     }
 
     cursor = marker.cursor;
-    end = marker.end;
     destructor_head = target_head;
   }
 
@@ -251,16 +255,14 @@ public:
     }
 
     cursor = current_page->begin();
-    end = root_end;
+    end = current_page->end;
     destructor_head = nullptr;
   }
 
   /// Bytes remaining in the current page before another page allocation would be needed.
   [[nodiscard]] std::size_t remaining() const noexcept {
-    if (current_page == nullptr)
-      return 0;
-
-    return static_cast<std::size_t>(end - cursor);
+    return static_cast<std::size_t>(reinterpret_cast<std::uintptr_t>(end) -
+                                    reinterpret_cast<std::uintptr_t>(cursor));
   }
 
 private:
@@ -293,6 +295,7 @@ private:
     void* raw = ::operator new(kPageHeaderBytes + usable_capacity);
     auto* page = ::new (raw) detail::ArenaPage{};
     page->previous = previous;
+    page->end = page->begin() + static_cast<std::ptrdiff_t>(usable_capacity);
     return page;
   }
 
@@ -313,7 +316,6 @@ private:
     cursor = nullptr;
     end = nullptr;
     destructor_head = nullptr;
-    root_end = nullptr;
   }
 
   template <std::size_t Alignment, bool NeedsNode>
@@ -321,11 +323,8 @@ private:
     static_assert(Alignment != 0);
     static_assert((Alignment & (Alignment - 1)) == 0);
 
-    if (cursor == nullptr) [[unlikely]]
-      return {};
-
     auto* object = reinterpret_cast<std::byte*>(align_up(reinterpret_cast<std::uintptr_t>(cursor), Alignment));
-    std::byte* next = object + static_cast<std::ptrdiff_t>(object_size);
+    std::byte* next = object + object_size;
     if (next > end) [[unlikely]]
       return {};
 
@@ -345,22 +344,19 @@ private:
   }
 
   template <std::size_t Alignment, bool NeedsNode>
-  [[nodiscard]] ReservedStorage reserve_storage(const std::size_t object_size) {
-    if (auto storage = try_carve<Alignment, NeedsNode>(object_size); storage.object != nullptr) [[likely]]
-      return storage;
-
+  [[nodiscard]] ReservedStorage grow_and_carve(const std::size_t object_size) {
     const std::size_t minimum = minimum_page_capacity<Alignment, NeedsNode>(object_size);
-    const std::size_t cap = current_page ? static_cast<std::size_t>(end - current_page->begin()) : 0;
+    const std::size_t cap = static_cast<std::size_t>(end - current_page->begin());
     const std::size_t new_capacity = std::max(doubled_capacity(cap), minimum);
 
     detail::ArenaPage* new_page = allocate_page(new_capacity, current_page);
     current_page = new_page;
     cursor = new_page->begin();
-    end = cursor + static_cast<std::ptrdiff_t>(new_capacity);
+    end = new_page->end;
 
-    // New page is sized to fit — carve unconditionally
+    // The new page is sized to fit, so avoid repeating the capacity checks on this cold path.
     auto* object = reinterpret_cast<std::byte*>(align_up(reinterpret_cast<std::uintptr_t>(cursor), Alignment));
-    std::byte* next = object + static_cast<std::ptrdiff_t>(object_size);
+    std::byte* next = object + object_size;
 
     if constexpr (!NeedsNode) {
       cursor = next;
@@ -399,7 +395,9 @@ private:
 
   template <std::size_t Alignment>
   [[nodiscard]] std::byte* allocate(const std::size_t size) {
-    return reserve_storage<Alignment, false>(size).object;
+    if (auto* object = try_carve<Alignment, false>(size).object) [[likely]]
+      return object;
+    return grow_and_carve<Alignment, false>(size).object;
   }
 
   [[nodiscard]] bool is_valid_marker(const ArenaMarker marker) const noexcept {
@@ -414,19 +412,13 @@ private:
       const auto marker_cursor_addr = reinterpret_cast<std::uintptr_t>(marker.cursor);
 
       if (page == current_page) {
-        // The end of the current page is Arena::end; the marker's end must match
-        if (marker.end != end) [[unlikely]]
-          return false;
         const auto current_cursor_addr = reinterpret_cast<std::uintptr_t>(cursor);
         if (marker_cursor_addr < begin_addr || marker_cursor_addr > current_cursor_addr) [[unlikely]]
           return false;
       }
       else {
-        // Finalized page: use marker.end for range validation
-        const auto marker_end_addr = reinterpret_cast<std::uintptr_t>(marker.end);
-        if (marker_end_addr < begin_addr) [[unlikely]]
-          return false;
-        if (marker_cursor_addr < begin_addr || marker_cursor_addr > marker_end_addr) [[unlikely]]
+        const auto page_end_addr = reinterpret_cast<std::uintptr_t>(page->end);
+        if (marker_cursor_addr < begin_addr || marker_cursor_addr > page_end_addr) [[unlikely]]
           return false;
       }
 
@@ -485,7 +477,6 @@ private:
   std::byte* cursor = nullptr;
   std::byte* end = nullptr;
   detail::ArenaPage::DestructorNode* destructor_head = nullptr;
-  std::byte* root_end = nullptr;
 };
 
 inline ArenaCheckpoint::~ArenaCheckpoint() noexcept { rollback(); }

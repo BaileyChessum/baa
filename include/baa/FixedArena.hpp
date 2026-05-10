@@ -77,23 +77,14 @@ public:
     requires std::constructible_from<T, Args...>
   [[nodiscard]] T& emplace(Args&&... args) {
     const FixedArenaMarker saved = mark();
-    std::byte* raw = allocate<alignof(T)>(sizeof(T));
-    if (!raw) [[unlikely]]
+    ReservedStorage storage = try_carve<alignof(T), !std::is_trivially_destructible_v<T>>(sizeof(T));
+    if (!storage.object) [[unlikely]]
       throw std::bad_alloc{};
 
-    DestructorNode* node = nullptr;
-    if constexpr (!std::is_trivially_destructible_v<T>) {
-      node = allocate_node();
-      if (!node) [[unlikely]] {
-        restore_cursor_only(saved);
-        throw std::bad_alloc{};
-      }
-    }
-
     try {
-      T* object = ::new (raw) T(std::forward<Args>(args)...);
+      T* object = ::new (storage.object) T(std::forward<Args>(args)...);
       if constexpr (!std::is_trivially_destructible_v<T>)
-        link_node(node, object, 1, &destroy_range<T>);
+        link_node(storage.node, object, 1, &destroy_range<T>);
       return *object;
     }
     catch (...) {
@@ -122,20 +113,11 @@ public:
       throw std::bad_alloc{};
 
     const FixedArenaMarker saved = mark();
-    std::byte* raw = allocate<alignof(T)>(sizeof(T) * count);
-    if (!raw) [[unlikely]]
+    ReservedStorage storage = try_carve<alignof(T), !std::is_trivially_destructible_v<T>>(sizeof(T) * count);
+    if (!storage.object) [[unlikely]]
       throw std::bad_alloc{};
 
-    DestructorNode* node = nullptr;
-    if constexpr (!std::is_trivially_destructible_v<T>) {
-      node = allocate_node();
-      if (!node) [[unlikely]] {
-        restore_cursor_only(saved);
-        throw std::bad_alloc{};
-      }
-    }
-
-    T* objects = reinterpret_cast<T*>(raw);
+    T* objects = reinterpret_cast<T*>(storage.object);
     std::size_t constructed = 0;
     try {
       for (; constructed < count; ++constructed)
@@ -148,7 +130,7 @@ public:
     }
 
     if constexpr (!std::is_trivially_destructible_v<T>)
-      link_node(node, objects, count, &destroy_range<T>);
+      link_node(storage.node, objects, count, &destroy_range<T>);
 
     return std::span<T>(objects, count);
   }
@@ -235,30 +217,44 @@ private:
     void (*destroy)(void*, std::size_t) noexcept;
   };
 
-  template <std::size_t Alignment>
-  [[nodiscard]] std::byte* allocate(const std::size_t size) noexcept {
+  struct ReservedStorage {
+    std::byte* object = nullptr;
+    DestructorNode* node = nullptr;
+  };
+
+  template <std::size_t Alignment, bool NeedsNode>
+  [[nodiscard]] ReservedStorage try_carve(const std::size_t size) noexcept {
     static_assert(Alignment != 0);
     static_assert((Alignment & (Alignment - 1)) == 0);
 
     if (cursor == nullptr) [[unlikely]]
-      return nullptr;
+      return {};
 
-    const auto addr = reinterpret_cast<std::uintptr_t>(cursor);
-    const auto misalignment = addr & (Alignment - 1);
-    const auto padding = misalignment == 0 ? 0 : Alignment - misalignment;
+    auto* object = reinterpret_cast<std::byte*>(
+        (reinterpret_cast<std::uintptr_t>(cursor) + (Alignment - 1)) & ~std::uintptr_t{Alignment - 1});
+    std::byte* next = object + size;
+    if (next > end) [[unlikely]]
+      return {};
 
-    if (const auto available = static_cast<std::size_t>(end - cursor);
-        padding > available || size > available - padding) [[unlikely]]
-      return nullptr;
+    if constexpr (!NeedsNode) {
+      cursor = next;
+      return {object, nullptr};
+    }
 
-    const auto aligned = cursor + static_cast<std::ptrdiff_t>(padding);
-    cursor = aligned + size;
-    return aligned;
+    auto* node = reinterpret_cast<DestructorNode*>(
+        (reinterpret_cast<std::uintptr_t>(next) + (alignof(DestructorNode) - 1)) &
+        ~std::uintptr_t{alignof(DestructorNode) - 1});
+    auto* new_cursor = reinterpret_cast<std::byte*>(node) + sizeof(DestructorNode);
+    if (new_cursor > end) [[unlikely]]
+      return {};
+
+    cursor = new_cursor;
+    return {object, node};
   }
 
-  [[nodiscard]] DestructorNode* allocate_node() noexcept {
-    std::byte* raw = allocate<alignof(DestructorNode)>(sizeof(DestructorNode));
-    return raw ? reinterpret_cast<DestructorNode*>(raw) : nullptr;
+  template <std::size_t Alignment>
+  [[nodiscard]] std::byte* allocate(const std::size_t size) noexcept {
+    return try_carve<Alignment, false>(size).object;
   }
 
   void restore_cursor_only(const FixedArenaMarker m) noexcept { cursor = m.cursor; }
